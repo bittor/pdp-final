@@ -1,0 +1,17 @@
+# depslib dependency file v1.0
+1356737392 source:c:\users\kai-hsiang\desktop\search\anqi.cc
+	<cassert>
+	<cstdio>
+	<cstdlib>
+	<cstring>
+	<windows.h>
+	"anqi.hh"
+
+1356735548 c:\users\kai-hsiang\desktop\search\anqi.hh
+
+1402265006 source:c:\users\kai-hsiang\desktop\search\main.cc
+	<cstdio>
+	<cstdlib>
+	<windows.h>
+	"anqi.hh"
+
