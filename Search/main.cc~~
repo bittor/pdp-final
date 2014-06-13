@@ -1,0 +1,309 @@
+/*****************************************************************************\
+ * Theory of Computer Games: Fall 2012
+ * Chinese Dark Chess Search Engine Template by You-cheng Syu
+ *
+ * This file may not be used out of the class unless asking
+ * for permission first.
+ \*****************************************************************************/
+#include<cstdio>
+#include<cstdlib>
+#include<windows.h>
+#include"anqi.hh"
+
+#define SIMULATION_ITERATION 20000
+#define SIMULATION_STEP 20
+
+typedef  int SCORE;
+static const SCORE INF=1000001;
+static const SCORE WIN=1000000;
+SCORE SearchMax(const BOARD&,int,int);
+SCORE SearchMin(const BOARD&,int,int);
+
+DWORD Tick;     // 開始時刻
+int   TimeOut;  // 時限
+MOV   BestMove; // 搜出來的最佳著法
+
+bool TimesUp() {
+	return GetTickCount()-Tick>=TimeOut;
+}
+
+
+// 一個重量不重質的審局函數
+SCORE Eval(const BOARD &B) {
+	int cnt[2]={0,0};
+	for(POS p=0;p<32;p++){const CLR c=GetColor(B.fin[p]);if(c!=-1)cnt[c]++;}
+	for(int i=0;i<14;i++)cnt[GetColor(FIN(i))]+=B.cnt[i];
+	return cnt[B.who]-cnt[B.who^1];
+}
+
+/************** bittuh's expansion ********************/
+int explore(NODE *parent, const int numSimulation){
+	int i, j, k, WIN = 0;
+	NODE *curNode, *newNode, *preNode;
+	MOVLST legal_moves;
+	struct BOARD *posi;
+	parent->posi->MoveGen(legal_moves);
+	curNode = parent;
+
+
+	// for all legal moves, add a new node to the game tree
+	for(i = 0; i < legal_moves.num; i++){
+		newNode = (NODE*)malloc(sizeof(NODE));
+		newNode->posi = (BOARD*)malloc(sizeof(BOARD));
+		memcpy(newNode->posi, parent->posi, sizeof(BOARD));
+		newNode->parent = parent;
+		newNode->child = NULL;
+		newNode->siblg = NULL;
+		newNode->Depth = parent->Depth + 1;
+		newNode->premove = legal_moves.mov[i];
+		newNode->posi->Move(legal_moves.mov[i]);
+
+		/*************simulate****************/
+		for(j = 0; j < numSimulation; j++){
+			if(bittuhSimulate(newNode->posi)){
+				newNode->L++;
+				WIN++;
+			}
+			else newNode->W++;
+		}
+		/**************************************/
+		if(i == 0){
+			curNode->child = newNode;
+			curNode = curNode->child;
+		}
+		else{
+			curNode->siblg = newNode;
+			curNode = curNode->siblg;
+		}
+	}
+	return WIN;
+}
+/*********************************************************/
+
+/******************* bittuh's selection **********************/
+NODE *find_best_child(NODE *parent, double c, int kk){
+	int i = 0, k = 0, mm, nn, m, n;
+	double LEO, REO;
+	double ucb;
+
+	NODE *curNode = parent->child;
+	NODE *preNode, *nextNode;
+	double best_score = UCB(curNode, c);
+	NODE *best_child = curNode;
+	m = GetX(parent->premove);
+	n = GetY(parent->premove);
+	while(curNode->sibling != NULL){
+		curNode = curNode->sibling;
+		ucb = UCB(curNode, c);
+		if(best_score <= ucb){
+			best_score = ucb;
+			best_child = curNode;
+		}
+	}
+	if(kk == 1 && parent->Depth == 0){
+		fprintf(stderr, "[%d] %d/%d %f\n", best_child->premove, best_child->W, best_child->L, UCB(best_child, c));
+		//scanf("%d");
+	}
+	curNode = parent->child;
+	preNode = parent;
+	nextNode = curNode->siblg;
+	// PRUNE!!!!!!
+	/*
+	   if(parent->W + parent->L > 10000){
+	   while(curNode!= NULL){
+	   if(curNode->W + curNode->L > 1000 && best_child->W + best_child->L > 1000){
+
+	   LEO = (double)best_child->W/(best_child->W + best_child->L) - piii * standard_devia(best_child);
+	   REO = (double)curNode->W/(curNode->W + curNode->L) + piii * standard_devia(curNode);
+	   if(LEO > REO){
+	   if(preNode == parent) preNode->child = curNode->siblg;
+	   else preNode->siblg = curNode->siblg;
+	   free(curNode->posi);
+	   free(curNode);
+	   if(preNode == parent)
+	   curNode == parent->child;
+	   else
+	   curNode == preNode->siblg;
+	   }
+	   else{
+	   if(preNode == parent)
+	   preNode = preNode->child;
+	   else
+	   preNode = preNode->siblg;
+	   curNode = preNode->siblg;
+	   }
+	   }
+	   else{
+	   if(preNode == parent)
+	   preNode = preNode->child;
+	   else
+	   preNode = preNode->siblg;
+	   curNode = preNode->siblg;
+	   }
+	   }
+	   }
+	 */
+	return best_child;
+}
+/*********************************************************/
+
+/********* bittuh's simulation ***************************/
+/* return true if win, false otherwise */
+bool bittuhSimulate(BOARD *brd) {
+	const CLR player=brd->who;
+	int na, nb, i;
+	POS move;
+	MOVLST lst;
+	BOARD tempBoard;
+	memcpy(&tempBoard, brd, sizeof(BOARD));
+
+
+	/* TODO: simulate until a win/lose/draw */
+	/*
+	   temp.MoveGen(lst);
+	   for(i = 0; i < 2*lst.num; i++){
+	   na = rand()%lst.num;
+	   nb = rand()%lst.num;
+	   move = lst.mov[na];
+	   lst.mov[na] = lst.mov[nb];
+	   lst.mov[nb] = move;
+	   }
+	   for(i = lst.num - 1; i > 0; i--)
+	   temp.Move(lst.mov[i]);
+	 */
+	while(tempBoard.ChkLose()&&tempBoard.noFight<40){
+		tempBoard.MoveGen(lst);
+		int randn = rand()%lst.num;
+		tempBoard.Move(lst.mov[randn]);
+	}
+	total++;
+	if(tempBoard.ChkLose()) return tempBoard.who == player ? true : false; //win or lose
+	else return false; //draw
+
+}
+
+SCORE RandomSimulation(const BOARD &B){
+	BOARD N(B);
+	for(int i=0; i<SIMULATION_STEP; i++){
+		if(N.ChkLose())
+			return i%2==0 ? +WIN: -WIN;
+
+		MOVLST lst;
+		if(TimesUp() || N.MoveGen(lst)==0)
+			return Eval(N);
+
+		int p = rand()%lst.num;
+		N.Move(lst.mov[p]);
+	}
+	return Eval(N);
+}
+
+
+MOV Play(const BOARD &B) {
+	POS p; int c=0;
+
+	// 新遊戲？隨機翻子
+	if(B.who==-1){p=rand()%32;return MOV(p,p);}
+
+	// 若搜出來的結果會比現在好就用搜出來的走法
+	MOVLST lst;
+	SCORE best_score = -INT_MAX;
+	B.MoveGen(lst);
+
+	for(int i=0; i<lst.num; i++){
+		SCORE current = 0;
+		BOARD N(B);
+		N.Move(lst.mov[i]);
+
+		for(int j=0; j<SIMULATION_ITERATION; j++){
+			current += RandomSimulation(N);
+		}
+
+		if(current > best_score)
+			BestMove = lst.mov[i];
+	}
+
+	// 否則隨便翻一個地方 但小心可能已經沒地方翻了
+	for(p=0;p<32;p++)if(B.fin[p]==FIN_X)c++;
+	if(c==0)return BestMove;
+	if(lst.num!=0 && rand()%2==0) return BestMove;
+
+	c=rand()%c;
+	for(p=0;p<32;p++)if(B.fin[p]==FIN_X&&--c<0)break;
+	return MOV(p,p);
+}
+
+/*********** bittuh's play **************/
+POS bittuhPlay(BOARD *brd, double c){
+	NODE *root = (NODE*)malloc(sizeof(NODE));
+	NODE *curNode = root;
+	MOVLST lst;
+	int i, tempWin, old_total, k, tempp = 0;
+	int kkk = 0;
+	root->parent = NULL;
+	root->siblg = NULL;
+	root->child = NULL;
+	root->posi = brd;
+	root->W = explore(root, 1000);
+	root->L = total - root->W;
+	root->Depth = 0;
+	brd->MoveGen(lst);
+	// tree-growing loop
+	while(GetTickCount()-Tick < TimeOut){
+		/********* selection ***********/
+		curNode = root;
+		for(i = 1; curNode->child != NULL; i++){
+			curNode = find_best_child(curNode, c, 0);
+			//if(curNode->Depth == 2)
+			//scanf("%d");
+		}
+
+		old_total = total;
+		/******* expansion & simulation *******/
+		tempWin = explore(curNode, 100);
+
+		/********* back propogation **********/
+		for(k = 0; curNode->parent != NULL; k++){
+			if(k%2 == 0){
+				curNode->W += tempWin;
+				curNode->L += (total - old_total - tempWin);
+			}
+			else{
+				curNode->L += tempWin;
+				curNode->W += (total - old_total - tempWin);
+			}
+			curNode = curNode->parent;
+		}
+		/**************************************/
+	}
+	//give out final answer
+	fprintf(stderr, "\n");
+	curNode = find_best(root, c, 1);
+	fprintf(stderr, "SIMU: %d ", total);
+	fprintf(stderr, "%d/%d\n", curNode->W, curNode->L);
+	//fprintf(stderr, "EXPAND: %d\n", expanded_node);
+	for(i = 0; i < AREA; i++){
+		if(root->posi->clr[i] != curNode->posi->clr[i]){
+			break;
+		}
+	}
+	fprintf(stderr, "Expected: ");
+	curNode = root;
+	while(curNode->child != NULL){
+		curNode = find_best(curNode, c, 0);
+		fprintf(stderr, "[%d]->", curNode->premove);
+	}
+	fprintf(stderr, "\n");
+	return i;
+
+}
+/**************************************************/
+int main() {
+	srand(Tick=GetTickCount());
+
+	BOARD B;
+	TimeOut=(B.LoadGame("board.txt")-3)*1000;
+	if(!B.ChkLose())Output(Play(B));
+
+	return 0;
+}

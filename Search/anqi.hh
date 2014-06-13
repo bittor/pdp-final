@@ -51,13 +51,14 @@ struct MOV {
 
 struct MOVLST {
 	int num;     // 走法數(移動+吃子,不包括翻子)
-	MOV mov[68];
+	MOV mov[100];
 };
 
 struct BOARD {
 	CLR who;     // 現在輪到那一方下
 	FIN fin[32]; // 各個位置上面擺了啥
 	int cnt[14]; // 各種棋子的未翻開數量
+	int noFight;
 
 	void NewGame();              // 開新遊戲
 	int  LoadGame(const char*);  // 載入遊戲並傳回時限(單位:秒)
@@ -70,9 +71,36 @@ struct BOARD {
 	void Move(MOV);              // 移動 or 吃子
 };
 
+/************ add by bittuh for tree structure***********/
+typedef struct Node{
+   int W;
+   int L;
+   int D;
+   struct MOV premove;
+   char Depth;
+   struct Node *child;
+   struct Node *siblg;
+   struct Node *parent;
+   struct BOARD *posi;
+}NODE;
+/*********************************************************/
+
 CLR  GetColor(FIN);    // 算出棋子的顏色
 LVL  GetLevel(FIN);    // 算出棋子的階級
 bool ChkEats(FIN,FIN); // 判斷第一個棋子能否吃第二個棋子
 void Output (MOV);     // 將答案傳給 GUI
+
+struct bittuhBoard{
+    unsigned int pieces[16];
+    unsigned int red;
+    unsigned int black;
+    unsigned int occupied;
+};
+
+int bittuhEatGen(BOARD brd, MOVLST &lst);
+int bittuhMoveGen(BOARD brd, MOVLST &lst);
+int bittuhFlipGen(BOARD brd, MOVLST &lst);
+int bittuhNotEatGen(BOARD brd, MOVLST &lst);
+int bittuhAllMoveGen(BOARD brd, MOVLST &lst);
 
 #endif

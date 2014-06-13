@@ -40,6 +40,7 @@ LVL GetLevel(FIN f) {
 	return LVL(f%7);
 }
 
+// can fa eat fb?
 bool ChkEats(FIN fa,FIN fb) {
 	if(fa>=FIN_X)return false;
 	if(fb==FIN_X)return false;
@@ -102,6 +103,7 @@ static POS mkpos(int x,int y) {
 }
 
 int BOARD::LoadGame(const char *fn) {
+    noFight = 0;    //reset nofight counter
 	FILE *fp=fopen(fn,"r");
 	assert(fp!=NULL);
 
@@ -185,7 +187,7 @@ int BOARD::MoveGen(MOVLST &lst) const {
 	lst.num=0;
 	for(POS p=0;p<32;p++) {
 		const FIN pf=fin[p];
-		if(GetColor(pf)!=who)continue;
+		if(GetColor(pf)!=who)continue;  //not my pieces
 		const LVL pl=GetLevel(pf);
 		for(int z=0;z<4;z++) {
 			const POS q=ADJ[p][z];
@@ -205,18 +207,130 @@ int BOARD::MoveGen(MOVLST &lst) const {
 				break;
 			}
 		}
+
 	}
 	return lst.num;
+}
+int bittuhAllMoveGen(BOARD brd, MOVLST &lst){
+    if(brd.who==-1)return false;
+	lst.num=0;
+	for(POS p=0;p<32;p++) {
+		const FIN pf=brd.fin[p];
+		if(GetColor(pf)!=brd.who)continue;  //not my pieces
+		const LVL pl=GetLevel(pf);
+		for(int z=0;z<4;z++) {
+			const POS q=ADJ[p][z];
+			if(q==-1)continue;
+			const FIN qf=brd.fin[q];
+			if(pl!=LVL_C){if(!ChkEats(pf,qf))continue;}
+			else if(qf!=FIN_E)continue;
+			lst.mov[lst.num++]=MOV(p,q);
+		}
+		if(pl!=LVL_C)continue;
+		for(int z=0;z<4;z++) {
+			int c=0;
+			for(POS q=p;(q=ADJ[q][z])!=-1;) {
+				const FIN qf=brd.fin[q];
+				if(qf==FIN_E||++c!=2)continue;
+				if(qf!=FIN_X&&GetColor(qf)!=brd.who)lst.mov[lst.num++]=MOV(p,q);
+				break;
+			}
+		}
+
+	}
+	for(POS p=0;p<32;p++){
+        const FIN pf=brd.fin[p];
+        if(pf == FIN_X) lst.mov[lst.num++]=MOV(p,p);
+
+	}
+	return lst.num;
+}
+int bittuhEatGen(BOARD brd, MOVLST &lst){
+    if(brd.who==-1)return false;
+	lst.num=0;
+	for(POS st=0;st<32;st++) {
+        const FIN stFin=brd.fin[st];
+		if(GetColor(stFin)!=brd.who)continue;  //not my pieces
+        const LVL stLevel=GetLevel(stFin);
+        if(stLevel != LVL_C){
+            for(int z=0;z<4;z++) {          //neighbor
+                const POS ed=ADJ[st][z];
+                if(ed==-1)continue;
+                const FIN edFin=brd.fin[ed];
+                if(ChkEats(stFin,edFin) && edFin!=FIN_E)
+                    lst.mov[lst.num++]=MOV(st,ed);
+            }
+        }
+        else{
+            for(int z=0;z<4;z++) {
+                int jump=0;
+                for(POS ed=ADJ[st][z]; ed != -1 && jump < 2; ed = ADJ[ed][z]) {
+                    const FIN edFin=brd.fin[ed];
+                    if(edFin != FIN_E) jump++;
+                    //destination is not Empty or Sealed, and is opponent
+                    if(edFin < FIN_X && GetColor(edFin) != brd.who)lst.mov[lst.num++]=MOV(st,ed);
+                    break;
+                }
+            }
+        }
+	}
+}
+int bittuhMoveGen(BOARD brd, MOVLST &lst){
+    if(brd.who==-1)return false;
+	lst.num=0;
+	for(POS st=0;st<32;st++){
+        const FIN stFin=brd.fin[st];
+		if(GetColor(stFin)!=brd.who)continue;  //not my pieces
+		for(int z=0;z<4;z++) {          //neighbor
+            const POS ed=ADJ[st][z];
+            if(ed==-1)continue;
+            if(brd.fin[ed] == FIN_E)
+                lst.mov[lst.num++]=MOV(st,ed);
+        }
+	}
+}
+
+int bittuhFlipGen(BOARD brd, MOVLST &lst){
+    if(brd.who==-1)return false;
+	lst.num=0;
+	for(POS p=0;p<32;p++){
+        const FIN pf=brd.fin[p];
+        if(pf == FIN_X) lst.mov[lst.num++]=MOV(p,p);
+
+	}
+
+}
+
+int bittuhNotEatGen(BOARD brd, MOVLST &lst){
+    if(brd.who==-1)return false;
+	lst.num=0;
+	for(POS st=0;st<32;st++){
+        const FIN stFin=brd.fin[st];
+		if(GetColor(stFin)!=brd.who)continue;  //not my pieces
+		for(int z=0;z<4;z++) {          //neighbor
+            const POS ed=ADJ[st][z];
+            if(ed==-1)continue;
+            if(brd.fin[ed] == FIN_E)
+                lst.mov[lst.num++]=MOV(st,ed);
+        }
+	}
+	for(POS p=0;p<32;p++){
+        const FIN pf=brd.fin[p];
+        if(pf == FIN_X) lst.mov[lst.num++]=MOV(p,p);
+
+	}
 }
 
 bool BOARD::ChkLose() const {
 	if(who==-1)return false;
 
-	bool fDark=false;
+	bool existDark=false;
+	//if any pieces still unrevealed?
+	//is that mine?
 	for(int i=0;i<14;i++) {
 		if(cnt[i]==0)continue;
 		if(GetColor(FIN(i))==who)return false;
-		fDark=true;
+		existDark=true;
 	}
 
 	bool fLive=false;
@@ -224,7 +338,7 @@ bool BOARD::ChkLose() const {
 	if(!fLive)return true;
 
 	MOVLST lst;
-	return !fDark&&MoveGen(lst)==0;
+	return !existDark&&MoveGen(lst)==0;
 }
 
 bool BOARD::ChkValid(MOV m) const {
@@ -256,10 +370,20 @@ void BOARD::Flip(POS p,FIN f) {
 
 void BOARD::Move(MOV m) {
 	if(m.ed!=m.st) {
+        if(fin[m.ed] != FIN_E) noFight=0;
+        else noFight++;
 		fin[m.ed]=fin[m.st];
 		fin[m.st]=FIN_E;
 		who^=1;
 	} else {
 		Flip(m.st);
+		noFight=0;
 	}
 }
+/*
+int bittuhMoveGen(BOARD brd, MOVLST &lst) const{
+
+
+}*/
+
+
