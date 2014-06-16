@@ -274,6 +274,7 @@ int bittuhEatGen(BOARD brd, MOVLST &lst){
             }
         }
 	}
+	return lst.num;
 }
 int bittuhMoveGen(BOARD brd, MOVLST &lst){
     if(brd.who==-1)return false;
@@ -288,6 +289,7 @@ int bittuhMoveGen(BOARD brd, MOVLST &lst){
                 lst.mov[lst.num++]=MOV(st,ed);
         }
 	}
+	return lst.num;
 }
 
 int bittuhFlipGen(BOARD brd, MOVLST &lst){
@@ -298,7 +300,7 @@ int bittuhFlipGen(BOARD brd, MOVLST &lst){
         if(pf == FIN_X) lst.mov[lst.num++]=MOV(p,p);
 
 	}
-
+    return lst.num;
 }
 
 int bittuhNotEatGen(BOARD brd, MOVLST &lst){
@@ -319,6 +321,7 @@ int bittuhNotEatGen(BOARD brd, MOVLST &lst){
         if(pf == FIN_X) lst.mov[lst.num++]=MOV(p,p);
 
 	}
+	return lst.num;
 }
 
 bool BOARD::ChkLose() const {
@@ -339,6 +342,18 @@ bool BOARD::ChkLose() const {
 
 	MOVLST lst;
 	return !existDark&&MoveGen(lst)==0;
+}
+
+bool BOARD::bittuhChkLose() const{
+    if(who==-1)return false;
+    for(int i=who*7;i<who*7+7;i++) {
+		if(cnt[i]==0) return false;
+	}
+	for(int p = 0; p < 32; p++){
+        if(GetColor(fin[p]) == who)
+            return false;
+	}
+	return true;
 }
 
 bool BOARD::ChkValid(MOV m) const {

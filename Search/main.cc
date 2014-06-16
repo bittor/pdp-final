@@ -17,9 +17,13 @@
 #define OTHER_LEVEL_SIMULATION 100
 #define ENABLE_PROFILING
 
+#define EatRate 7
+#define MoveRate 2
+#define FlipRate 1
+
 #define PRINT_FIRST_LEVEL 1
 #define NOT_PRINT_FIRST_LEVEL 0
-#define EXPLORE_PARA 0.1
+#define EXPLORE_PARA 0.7
 
 
 #ifdef ENABLE_PROFILING
@@ -47,7 +51,7 @@ int bittuhSimulate(BOARD *brd) {
     ENABLE_PROFILING_Tick = GetTickCount();
 	const CLR player=brd->who;
 	int randn;
-	MOVLST lst;
+	MOVLST eatlst, movelst, fliplist, lst;
 	BOARD tempBoard;
 	memcpy(&tempBoard, brd, sizeof(BOARD));
     int simulateDepth = 0;
@@ -58,13 +62,30 @@ int bittuhSimulate(BOARD *brd) {
 		if(highestSimulateDepth < simulateDepth) highestSimulateDepth = simulateDepth;
 #endif
 
-		bittuhEatGen(tempBoard, lst);   //Eat as the highest priority
-		if(lst.num == 0){
-                bittuhNotEatGen(tempBoard, lst);    //if no Eat, use other kinds
-		}
 
-		randn = rand()%lst.num;
-		tempBoard.Move(lst.mov[randn]);
+		bittuhEatGen(tempBoard, eatlst);   //Eat as the highest priority
+		bittuhMoveGen(tempBoard, movelst);
+		bittuhFlipGen(tempBoard, fliplist);
+
+		randn = rand()%(EatRate*eatlst.num+MoveRate*movelst.num+fliplist.num);
+
+		if(randn < EatRate*eatlst.num){
+            tempBoard.Move(eatlst.mov[randn%(eatlst.num)]);
+		}
+		else if(randn < EatRate*eatlst.num+MoveRate*movelst.num){
+            tempBoard.Move(movelst.mov[(randn-EatRate*eatlst.num)%(movelst.num)]);
+		}
+		else
+            tempBoard.Move(fliplist.mov[(randn-EatRate*eatlst.num-MoveRate*movelst.num)]);
+
+/*
+        bittuhEatGen(tempBoard, lst);
+        if(lst.num==0){
+            bittuhNotEatGen(tempBoard, lst);
+        }
+        randn = rand()%lst.num;
+        tempBoard.Move(lst.mov[randn]);
+        */
 
 	}
 
@@ -78,6 +99,63 @@ int bittuhSimulate(BOARD *brd) {
 
 	if(tempBoard.ChkLose()) return tempBoard.who == player ? 0 : 1; //win or lose
 	else return 2; //draw
+
+}
+
+int bittuhSimulate2(BOARD *brd) {
+    ENABLE_PROFILING_Tick = GetTickCount();
+	const CLR player=brd->who;
+	int randn;
+	MOVLST eatlst, movelst, fliplist, lst;
+	BOARD tempBoard;
+	memcpy(&tempBoard, brd, sizeof(BOARD));
+    int simulateDepth = 0;
+
+	while(!tempBoard.bittuhChkLose()&&tempBoard.noFight<40
+       && bittuhMoveGen(tempBoard, movelst)+bittuhFlipGen(tempBoard, fliplist) > 0){  // randomly play until win/lose/draw
+#ifdef ENABLE_PROFILING
+		simulateDepth++;
+		if(highestSimulateDepth < simulateDepth) highestSimulateDepth = simulateDepth;
+#endif
+
+
+		bittuhEatGen(tempBoard, eatlst);   //Eat as the highest priority
+		//bittuhMoveGen(tempBoard, movelst);
+		//bittuhFlipGen(tempBoard, fliplist);
+
+		randn = rand()%(EatRate*eatlst.num+MoveRate*movelst.num+fliplist.num);
+
+		if(randn < EatRate*eatlst.num){
+            tempBoard.Move(eatlst.mov[randn%(eatlst.num)]);
+		}
+		else if(randn < EatRate*eatlst.num+MoveRate*movelst.num){
+            tempBoard.Move(movelst.mov[(randn-EatRate*eatlst.num)%(movelst.num)]);
+		}
+		else
+            tempBoard.Move(fliplist.mov[(randn-EatRate*eatlst.num-MoveRate*movelst.num)]);
+
+/*
+        bittuhEatGen(tempBoard, lst);
+        if(lst.num==0){
+            bittuhNotEatGen(tempBoard, lst);
+        }
+        randn = rand()%lst.num;
+        tempBoard.Move(lst.mov[randn]);
+        */
+
+	}
+
+#ifdef ENABLE_PROFILING
+
+	simulateTick += GetTickCount()- ENABLE_PROFILING_Tick;
+#endif // DEBUG
+
+    bool lose = tempBoard.bittuhChkLose();
+    if(!lose && bittuhMoveGen(tempBoard, movelst)+bittuhFlipGen(tempBoard, fliplist) > 0){
+        drawCount++;
+        return 2;
+	}
+	else return tempBoard.who == player ? 0 : 1; //win or lose
 
 }
 
@@ -113,7 +191,7 @@ void explore(NODE *parent, const int numSimulation, int *parent_WIN, int *parent
 
 		/*************simulate****************/
 		for(j = 0; j < numSimulation; j++){
-            int simulatResult = bittuhSimulate(newNode->posi);
+            int simulatResult = bittuhSimulate2(newNode->posi);
 			if(simulatResult == 0){
 				newNode->L++;
 				*parent_WIN+=1;
@@ -148,7 +226,7 @@ double UCB(NODE *node, double c){
    //int W = node->W;
    //int L = node->L;
    int N = W+L+D;
-   return (double)W/N+(double)c*(double)pow(log(totalPlay)/N, 0.5);
+   return (double)(W+D/2)/N+(double)c*(double)pow(log(totalPlay)/N, 0.5);
 }
 
 double standard_devia(NODE *node){
@@ -156,7 +234,7 @@ double standard_devia(NODE *node){
    int W = node->Depth%2? node->L:node->W;
    int D = node->D;
    int Ni = W+L+D;
-   return pow(((double)W - (double)Ni * pow((double)W/Ni, 2))/Ni, 0.5);
+   return pow(((double)(W+D/2) - (double)Ni * pow((double)(W+D/2)/Ni, 2))/Ni, 0.5);
 }
 
 
@@ -172,7 +250,13 @@ NODE *find_best_child(NODE *parent, double c, int profile_flag){
 	NODE *best_child = parent->child;
 	for(curNode = parent->child; curNode!= NULL ;curNode = curNode->siblg){
         if(profile_flag == PRINT_FIRST_LEVEL)
-            fprintf(stderr, "%d->%d: %d/%d/%d, <%f>\n", curNode->premove.st, curNode->premove.ed, curNode->W, curNode->L, curNode->D, UCB(curNode, c));
+            fprintf(stderr, "%d->%d: %d/%d/%d, %.2f/%.2f/%.2f <%.3f>\n",
+                    curNode->premove.st, curNode->premove.ed,
+                    curNode->W, curNode->L, curNode->D,
+                    (double)curNode->W/(double)(curNode->W+curNode->L+curNode->D),
+                    (double)curNode->L/(double)(curNode->W+curNode->L+curNode->D),
+                    (double)curNode->D/(double)(curNode->W+curNode->L+curNode->D),
+                    UCB(curNode, c));
 
 		ucb = UCB(curNode, c);
 		if(best_score <= ucb){
@@ -239,6 +323,9 @@ NODE* bittuhPlay(BOARD *brd, double c){
 	root->W = tempWin;
 	root->L = tempLose;
 	root->D = totalPlay - tempWin - tempLose;
+	fprintf(stderr, "===========================\nbefore:\n");
+	find_best_child(root, c, PRINT_FIRST_LEVEL);
+	fprintf(stderr, "===========================\nafter:\n");
 
 	// tree-growing loop
 	while(GetTickCount()-Tick < TimeOut){
@@ -257,7 +344,7 @@ NODE* bittuhPlay(BOARD *brd, double c){
 		//fprintf(stderr, "~~curNode: %d, %d\n", curNode->W, curNode->W+curNode->L+curNode->D);
 		/********* back propogation **********/
 		tempTotal = totalPlay - old_totalPlay;
-		for(k = 0; curNode->parent != NULL; k++){
+		for(k = 0; curNode!= NULL; k++){
 			if(k%2 == 0){
 				curNode->W += tempWin;
 				curNode->L += tempLose;
