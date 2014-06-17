@@ -7,9 +7,11 @@
 #define MAX_MOVELIST 120
 #define MAX_FLIPLIST 65
 
-#define EatRate 6
-#define MoveRate 2
-#define FlipRate 2
+#define RESULT_PER_WORKITEM 5
+
+#define EatRate 8
+#define MoveRate 1
+#define FlipRate 1
 
 #define FIN_K 0
 #define	FIN_G 1
@@ -75,9 +77,16 @@ LVL GetLevel(int f) {
 	return LVL_P;
 }
 
-int myrand(long *seed){
-	*seed = (*seed ^ 0x5DEECE66DL) & ((1L << 48) - 1);
-	return *seed >> 16;
+int myrand(int *seed){
+	unsigned int hi, lo;
+	hi = 16807 * (*seed >> 16);
+	lo = 16807 * (*seed & 0xFFFF);
+	lo += (hi & 0x7FFF) << 16;
+	lo += hi >> 15;
+	if(lo > 2147483647)
+		lo -= 2147483647;
+	*seed = lo;
+	return *seed;
 }
 
 int ChkEats(int fa, int fb) {
@@ -98,75 +107,75 @@ int ChkEats(int fa, int fb) {
 
 int bittuhEatGen(int *brd, int *movelst){
 	if(brd[0] == -1) return 0;
-    movelst[0] = 0;
+	movelst[0] = 0;
 
-    for(int st = 0; st < 32; st++){
-        int stFin = brd[FINOFFSET+st];
+	for(int st = 0; st < 32; st++){
+		int stFin = brd[FINOFFSET+st];
 		if(GetColor(stFin)!=brd[0])continue;  //not my pieces
-        LVL stLevel=GetLevel(stFin);
+		LVL stLevel=GetLevel(stFin);
 
-        if(stLevel != LVL_C){
-            for(int z=0;z<4;z++) {          //neighbor
-                int ed=ADJ[st][z];
-                if(ed == -1) continue;
-                int edFin = brd[FINOFFSET+ed];
-                if(ChkEats(stFin, edFin) && edFin != FIN_E){
-                    movelst[2*movelst[0]+1] = st;
+		if(stLevel != LVL_C){
+			for(int z=0;z<4;z++) {          //neighbor
+				int ed=ADJ[st][z];
+				if(ed == -1) continue;
+				int edFin = brd[FINOFFSET+ed];
+				if(ChkEats(stFin, edFin) && edFin != FIN_E){
+					movelst[2*movelst[0]+1] = st;
 					movelst[2*movelst[0]+2] = ed;
 					movelst[0]++;
 				}
 			}
-        }
+		}
 		else{
-            for(int z=0;z<4;z++) {
-                int jump=0;
-                for(int ed = ADJ[st][z]; ed != -1 && jump < 2; ed = ADJ[ed][z]) {
-                    int edFin = brd[FINOFFSET+ed];
-                    if(edFin == FIN_E || ++jump != 2){
+			for(int z=0;z<4;z++) {
+				int jump=0;
+				for(int ed = ADJ[st][z]; ed != -1 && jump < 2; ed = ADJ[ed][z]) {
+					int edFin = brd[FINOFFSET+ed];
+					if(edFin == FIN_E || ++jump != 2){
 						continue;
 					}
-                    //destination is not Empty or Sealed, and is opponent
-                    if(edFin < FIN_X && GetColor(edFin) != brd[0] && jump > 0){
+					//destination is not Empty or Sealed, and is opponent
+					if(edFin < FIN_X && GetColor(edFin) != brd[0] && jump > 0){
 						movelst[2*movelst[0]+1] = st;
 						movelst[2*movelst[0]+2] = ed;
 						movelst[0]++;
 						break;
 					}
-                }
-            }
-        }
-    }
+				}
+			}
+		}
+	}
 	return movelst[0];
 }
 
 int bittuhMoveGen( int *brd, int *movelst){
-    int c = 1;
+	int c = 1;
 	if(brd[0]==-1)return 7788;
 	movelst[0]=0;
 	for(int st=0;st<32;st++){
-        int stFin=brd[FINOFFSET+st];
+		int stFin=brd[FINOFFSET+st];
 		c++;
 		if(GetColor(stFin)!=brd[0])continue;  //not my pieces
 		c++;
 		for(int z=0;z<4;z++) {          //neighbor
-            const int ed=ADJ[st][z];
-            if(ed == -1)continue;
-            if(brd[FINOFFSET+ed] == FIN_E){
-                movelst[2*movelst[0]+1] = st;
+			const int ed=ADJ[st][z];
+			if(ed == -1)continue;
+			if(brd[FINOFFSET+ed] == FIN_E){
+				movelst[2*movelst[0]+1] = st;
 				movelst[2*movelst[0]+2] = ed;
 				movelst[0]++;
 			}
-        }
+		}
 	}
 	return movelst[0];
 }
 
 int bittuhFlipGen(int *brd, int *movelst){
-    if(brd[0]==-1)return false;
+	if(brd[0]==-1)return false;
 	movelst[0]=0;
 	for(int p=0;p<32;p++){
-        int pFin = brd[FINOFFSET+p];
-        if(pFin == FIN_X){
+		int pFin = brd[FINOFFSET+p];
+		if(pFin == FIN_X){
 			movelst[2*movelst[0]+1] = p;
 			movelst[2*movelst[0]+2] = p;
 			movelst[0]++;
@@ -178,7 +187,7 @@ int bittuhFlipGen(int *brd, int *movelst){
 int myChkLose(int *brd){	//only detect whether any live piece(no matter it's moveable) exist and any unrevealed pieces
 	int c = 0;
 	if(brd[0]==-1) return -1;
-	
+
 	//if any my piece still unrevealed?
 	for(int i=7*brd[0];i<7*brd[0]+7;i++) {
 		if(brd[COUNTOFFSET+i]!=0) return 2;
@@ -187,14 +196,14 @@ int myChkLose(int *brd){	//only detect whether any live piece(no matter it's mov
 	/*
 	// if any live piece is mine?
 	for(int p=0;p<32;p++){
-		if(GetColor(brd[FINOFFSET+p])==brd[0])
-			return 1;
+	if(GetColor(brd[FINOFFSET+p])==brd[0])
+	return 1;
 	}*/
 
 	return 0;
 }
 
-void Flip(int *brd, int pos, long *seed){
+void Flip(int *brd, int pos, int *seed){
 	int f;
 	if(brd[FINOFFSET+pos] == FIN_X){
 		int i, sum = 0;
@@ -209,7 +218,7 @@ void Flip(int *brd, int pos, long *seed){
 	brd[0]^=1;
 }
 
-void Move(int *brd, int st, int ed, long *seed){
+void Move(int *brd, int st, int ed, int *seed){
 	if(st != ed){
 		if(brd[FINOFFSET+ed] != FIN_E) brd[NOFIGHTOFFSET] = 0;
 		else brd[NOFIGHTOFFSET]++;
@@ -232,21 +241,23 @@ void simulate(const __constant int *brd, __global int *result){
 	int movelist[MAX_MOVELIST];
 	int fliplist[MAX_FLIPLIST];
 	int idx = get_global_id(0);
-	long seed = (long)idx * 0x5a7d9e654;
+	int seed = (int)(idx+1) * 0x7e654;
 
 	//copy board buffer to private address space
 	for(int i = 0; i < BRD_TOTAL_SIZE; i++){
 		tempBrd[i] = brd[i];
 	}
 
-	while(tempBrd[NOFIGHTOFFSET] < 40 && depth < 150)
+		result[idx*RESULT_PER_WORKITEM+2] = -1;
+	while(tempBrd[NOFIGHTOFFSET] < 40)
 	{
 		int k = bittuhFlipGen(tempBrd, fliplist);
 		int l = bittuhMoveGen(tempBrd, movelist);
 		int m = bittuhEatGen(tempBrd, eatlist);
 		if(k+l+m == 0) break;
-		 
+
 		int randn = myrand(&seed)%(EatRate*eatlist[0]+MoveRate*movelist[0]+FlipRate*fliplist[0]);
+		result[idx*RESULT_PER_WORKITEM+3] = myrand(&seed);
 		if(randn < EatRate*eatlist[0]){
 			randn = randn%eatlist[0];
 			Move(tempBrd, eatlist[1+2*randn], eatlist[2+2*randn], &seed);
@@ -264,25 +275,26 @@ void simulate(const __constant int *brd, __global int *result){
 	}
 
 	if(tempBrd[NOFIGHTOFFSET] >= 40)
-		result[idx*3]++; //draw
+		result[idx*RESULT_PER_WORKITEM]++; //draw
 	else if(player == tempBrd[0])
-		result[idx*3+1]++; //opponent win
-	else
-		result[idx*3+2]++;	//opponent lose
+		result[idx*RESULT_PER_WORKITEM+1]++; //opponent win
+	else{
+		result[idx*RESULT_PER_WORKITEM+2]++;	//opponent lose
+
+	}
 
 	for(int i = 0; i < BRD_TOTAL_SIZE; i++){
-		result[idx*3+5+i] = tempBrd[i];
+		result[5+i] = tempBrd[i];
 	}
-	result[3] = depth;
-	result[4] = tempBrd[NOFIGHTOFFSET];
-	
-	result[57] = fliplist[0];
-	for(int i = 0; i < fliplist[0]; i++){
-		result[58+2*i] = fliplist[1+2*i];
-		result[59+2*i] = fliplist[2+2*i]; 
+	result[53] = depth;
+	result[54] = bittuhEatGen(tempBrd, eatlist);
+	for(int i = 0; i < eatlist[0]; i++){
+		result[55+2*i] = eatlist[1+2*i];
+		result[56+2*i] = eatlist[2+2*i];
 	}
 
-	
-		
+
+
+
 }
 

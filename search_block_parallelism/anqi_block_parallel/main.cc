@@ -19,6 +19,11 @@
 #define OTHER_LEVEL_SIMULATION 100
 #define ENABLE_PROFILING
 
+#define GPU_WORKITEM 1
+#define RESULT_PER_WORKITEM 5
+
+#define BRDBUFFER_SIZE 48
+
 #define PRINT_FIRST_LEVEL 1
 #define NOT_PRINT_FIRST_LEVEL 0
 #define EXPLORE_PARA 0.1
@@ -436,9 +441,9 @@ int main() {
         fprintf(stderr, "%d\n%s\n", status, msg);
     }
 
-    cl_mem bufBoard = clCreateBuffer(context, CL_MEM_READ_ONLY, 48*sizeof(int), NULL, &status);
+    cl_mem bufBoard = clCreateBuffer(context, CL_MEM_READ_ONLY, BRDBUFFER_SIZE*sizeof(int), NULL, &status);
     if(status != CL_SUCCESS) fprintf(stderr, "fuck1!\n");
-    cl_mem bufResult = clCreateBuffer(context, CL_MEM_READ_WRITE, 100*sizeof(int), NULL, &status);
+    cl_mem bufResult = clCreateBuffer(context, CL_MEM_READ_WRITE, (GPU_WORKITEM * RESULT_PER_WORKITEM+200)*sizeof(int), NULL, &status);
     if(status != CL_SUCCESS) fprintf(stderr, "fuck2!\n");
     //cl_mem bufADJ = clCreateBuffer(context, CL_MEM_READ_WRITE, 32*4*sizeof(int), NULL, &status);
     //if(status != CL_SUCCESS) fprintf(stderr, "fuck2_2!\n");
@@ -446,6 +451,7 @@ int main() {
 
     BOARD A;
     A.LoadGame("board4.txt");
+    A.Display();
     int brdarray[48];
     brdarray[0] = A.who;
     for(int i = 0; i < 32; i++){
@@ -472,9 +478,9 @@ int main() {
     //if(status != CL_SUCCESS) fprintf(stderr, "fuck6! %d\n", status);
 
     size_t globalWorkSize[1];
-	globalWorkSize[0] = 1;
+	globalWorkSize[0] = GPU_WORKITEM;
 	fprintf(stderr, "enqueu work\n");
-	for(int i = 0; i < 10; i++){
+	for(int i = 0; i < 1; i++){
         status = clEnqueueNDRangeKernel(cmdQueue, kernel, 1, NULL, globalWorkSize, NULL, 0, NULL, NULL);
         if(status != CL_SUCCESS) fprintf(stderr, "fuck7! %d\n", status);
 
@@ -482,32 +488,34 @@ int main() {
 	status = clFinish(cmdQueue);
 
 
-	int result[3000] = {0};
-	clEnqueueReadBuffer(cmdQueue, bufResult, CL_TRUE, 0, 1*sizeof(int), result, 0, NULL, NULL);
+	int result[GPU_WORKITEM * RESULT_PER_WORKITEM+200] = {0};
+	clEnqueueReadBuffer(cmdQueue, bufResult, CL_TRUE, 0, (RESULT_PER_WORKITEM * GPU_WORKITEM + 200)*sizeof(int), result, 0, NULL, NULL);
 	if(status != CL_SUCCESS) fprintf(stderr, "fuck8!\n");
 
     int draw = 0;
     int win = 0;
     int lose = 0;
-    for(int i = 0; i < 1; i++){
-        draw += result[3*i];
-        win += result[3*i+1];
-        lose += result[3*i+2];
+    for(int i = 0; i < GPU_WORKITEM; i++){
+        draw += result[RESULT_PER_WORKITEM*i];
+        win += result[RESULT_PER_WORKITEM*i+1];
+        lose += result[RESULT_PER_WORKITEM*i+2];
+        fprintf(stderr, "<%d,", result[RESULT_PER_WORKITEM*i]);
+        fprintf(stderr, "%d,", result[RESULT_PER_WORKITEM*i+1]);
+        fprintf(stderr, "%d>\n", result[RESULT_PER_WORKITEM*i+2]);
     }
     fprintf(stderr, "%d/%d/%d\n", draw, win, lose);
 
-    /*
-	fprintf(stderr, "draw: %d~\n", result[0]);
-    fprintf(stderr, "win: %d,%d\n", result[1], result[2]);
-    fprintf(stderr, "depth: %d~\n", result[3]);
-    fprintf(stderr, "noFight: %d~\n", result[4]);
-    for(int i=0; i < 48; i++){
+    fprintf(stderr, "who: %d\n", result[5]);
+    for(int i=1; i < 48; i++){
         fprintf(stderr, "%d: %d..\n", i, result[5+i]);
     }
-    fprintf(stderr, "(%d, %d, %d, %d)\n", result[53], result[54], result[55], result[56]);
+    fprintf(stderr, "last random number: %d\n", result[3]);
+    fprintf(stderr,"simulate depth: %d\n", result[53]);
+    fprintf(stderr,"still has %d XXXmove...\n", result[54]);
+    for(int i = 0; i < result[54]; i++){
+        fprintf(stderr, "[%d->%d]\n", result[55+2*i], result[56+2*i]);
+    }
 
-	A.Display();
-	fprintf(stderr, "=============================\n");
 	BOARD C;
     C.who = result[5];
     for(int i = 0; i < 32; i++){
@@ -515,15 +523,10 @@ int main() {
     }
     for(int i = 0; i < 14; i++){
         C.cnt[i] = result[38+i];
-
-    }
-    fprintf(stderr, "flip: %d\n", result[57]);
-    for(int i = 0; i < result[57]; i++){
-        fprintf(stderr, "<%d, %d>\n", result[58+2*i], result[59+2*i]);
     }
 
     C.Display();
-    */
+
 
 /*
 	srand(Tick=GetTickCount());
