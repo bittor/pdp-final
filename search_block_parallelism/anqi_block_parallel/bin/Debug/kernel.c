@@ -230,7 +230,7 @@ void simulate(const __constant int *brd, __global int *result){
 	}
 
 
-	while(bittuhFlipGen(tempBrd, fliplist) + bittuhMoveGen(tempBrd, movelist) != 0 &&
+	while(bittuhFlipGen(tempBrd, fliplist) + bittuhMoveGen(tempBrd, movelist) > 0 &&
 			myChkLose(tempBrd) != 1 && 
 			tempBrd[NOFIGHTOFFSET] < 40 && depth < 1000)
 	{
@@ -255,16 +255,29 @@ void simulate(const __constant int *brd, __global int *result){
 	
 	int lose = myChkLose(tempBrd);
 	if(lose != 1 && bittuhFlipGen(tempBrd, fliplist) + bittuhMoveGen(tempBrd, movelist) > 0)
-		result[idx*3+2]++; //draw
+		result[idx*3]++; //draw
 	else if(player == tempBrd[0])
-		result[idx*3]++; //opponent win
+		result[idx*3+1]++; //opponent win
 	else
-		result[idx*3+1]++;	//opponent lose
+		result[idx*3+2]++;	//opponent lose
 	result[idx*3+3] = depth;
 	result[idx*3+4] = tempBrd[NOFIGHTOFFSET];
 	for(int i = 0; i < BRD_TOTAL_SIZE; i++){
 		result[idx*3+5+i] = tempBrd[i];
 	}
+	result[53] = 0;
+	result[54] = 0;
+	result[55] = 0;
+	result[56] = 0;
+	if(lose != 1)
+		result[5+BRD_TOTAL_SIZE] = 5566;
+	int ttt = bittuhFlipGen(tempBrd, fliplist) + bittuhMoveGen(tempBrd, movelist);
+	if(ttt > 0)
+		result[6+BRD_TOTAL_SIZE] = ttt;
+	if(tempBrd[47] < 40)
+		result[7+48] = 1;
+	if(depth < 1000)
+		result[8+48] = 1;
 	//result[idx*3+53] = 
 		
 }

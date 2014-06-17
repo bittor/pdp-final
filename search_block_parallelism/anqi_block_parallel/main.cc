@@ -23,6 +23,17 @@
 #define NOT_PRINT_FIRST_LEVEL 0
 #define EXPLORE_PARA 0.1
 
+static const int adj[32][4]={
+	{ 1,-1,-1, 4},{ 2,-1, 0, 5},{ 3,-1, 1, 6},{-1,-1, 2, 7},
+	{ 5, 0,-1, 8},{ 6, 1, 4, 9},{ 7, 2, 5,10},{-1, 3, 6,11},
+	{ 9, 4,-1,12},{10, 5, 8,13},{11, 6, 9,14},{-1, 7,10,15},
+	{13, 8,-1,16},{14, 9,12,17},{15,10,13,18},{-1,11,14,19},
+	{17,12,-1,20},{18,13,16,21},{19,14,17,22},{-1,15,18,23},
+	{21,16,-1,24},{22,17,20,25},{23,18,21,26},{-1,19,22,27},
+	{25,20,-1,28},{26,21,24,29},{27,22,25,30},{-1,23,26,31},
+	{29,24,-1,-1},{30,25,28,-1},{31,26,29,-1},{-1,27,30,-1}
+};
+
 
 #ifdef ENABLE_PROFILING
 DWORD ENABLE_PROFILING_Tick;
@@ -371,7 +382,7 @@ int main() {
     char *kernelsrc = (char*)malloc(MAX_SRCSIZE*sizeof(char));
     srcsize = fread(kernelsrc, sizeof(char), MAX_SRCSIZE, fp);
     fclose(fp);
-    fprintf(stderr, "%s...%d\n", kernelsrc, srcsize);
+    fprintf(stderr, "...%d\n", srcsize);
 
 
 
@@ -408,7 +419,7 @@ int main() {
 
     /* command queue */
 	cl_command_queue cmdQueue;
-	cmdQueue = clCreateCommandQueue(context, devices[0], 0, &status);
+	cmdQueue = clCreateCommandQueue(context, devices[0], CL_QUEUE_PROFILING_ENABLE, &status);
 	if(status != CL_SUCCESS) fprintf(stderr, "command queue create err\n");
 
 
@@ -429,10 +440,12 @@ int main() {
     if(status != CL_SUCCESS) fprintf(stderr, "fuck1!\n");
     cl_mem bufResult = clCreateBuffer(context, CL_MEM_READ_WRITE, 100*sizeof(int), NULL, &status);
     if(status != CL_SUCCESS) fprintf(stderr, "fuck2!\n");
+    //cl_mem bufADJ = clCreateBuffer(context, CL_MEM_READ_WRITE, 32*4*sizeof(int), NULL, &status);
+    //if(status != CL_SUCCESS) fprintf(stderr, "fuck2_2!\n");
 
 
     BOARD A;
-    A.LoadGame("board.txt");
+    A.LoadGame("board4.txt");
     int brdarray[48];
     brdarray[0] = A.who;
     for(int i = 0; i < 32; i++){
@@ -445,6 +458,9 @@ int main() {
 
     status = clEnqueueWriteBuffer(cmdQueue, bufBoard, CL_TRUE, 0, 48*sizeof(int), brdarray, 0, NULL, NULL);
     if(status != CL_SUCCESS) fprintf(stderr, "fuck3!\n");
+    //status = clEnqueueWriteBuffer(cmdQueue, bufADJ, CL_TRUE, 0, 32*4*sizeof(int), adj, 0, NULL, NULL);
+    //if(status != CL_SUCCESS) fprintf(stderr, "fuck3_1!\n");
+
 
     cl_kernel kernel = clCreateKernel(program, "simulate", &status);
     if(status != CL_SUCCESS) fprintf(stderr, "fuck4! %d\n", status);
@@ -452,29 +468,43 @@ int main() {
     if(status != CL_SUCCESS) fprintf(stderr, "fuck5! %d\n", status);
     status = clSetKernelArg(kernel, 1, sizeof(cl_mem), &bufResult);
     if(status != CL_SUCCESS) fprintf(stderr, "fuck6! %d\n", status);
+    //status = clSetKernelArg(kernel, 1, sizeof(cl_mem), &bufADJ);
+    //if(status != CL_SUCCESS) fprintf(stderr, "fuck6! %d\n", status);
 
     size_t globalWorkSize[1];
 	globalWorkSize[0] = 1;
 	fprintf(stderr, "enqueu work\n");
-	status = clEnqueueNDRangeKernel(cmdQueue, kernel, 1, NULL, globalWorkSize, NULL, 0, NULL, NULL);
-	if(status != CL_SUCCESS) fprintf(stderr, "fuck7! %d\n", status);
+	for(int i = 0; i < 10; i++){
+        status = clEnqueueNDRangeKernel(cmdQueue, kernel, 1, NULL, globalWorkSize, NULL, 0, NULL, NULL);
+        if(status != CL_SUCCESS) fprintf(stderr, "fuck7! %d\n", status);
 
+	}
 	status = clFinish(cmdQueue);
-	if(status != CL_SUCCESS) fprintf(stderr, "fuck8! %d\n", status);
 
 
-	int result[100] = {0};
-	clEnqueueReadBuffer(cmdQueue, bufResult, CL_TRUE, 0, 100*sizeof(int), result, 0, NULL, NULL);
+	int result[3000] = {0};
+	clEnqueueReadBuffer(cmdQueue, bufResult, CL_TRUE, 0, 1*sizeof(int), result, 0, NULL, NULL);
 	if(status != CL_SUCCESS) fprintf(stderr, "fuck8!\n");
 
-	fprintf(stderr, "%d~\n", result[0]);
-    fprintf(stderr, "%d,%d\n", result[1], result[2]);
-    fprintf(stderr, "%d~\n", result[3]);
-    fprintf(stderr, "%d~\n", result[4]);
+    int draw = 0;
+    int win = 0;
+    int lose = 0;
+    for(int i = 0; i < 1; i++){
+        draw += result[3*i];
+        win += result[3*i+1];
+        lose += result[3*i+2];
+    }
+    fprintf(stderr, "%d/%d/%d\n", draw, win, lose);
+
+    /*
+	fprintf(stderr, "draw: %d~\n", result[0]);
+    fprintf(stderr, "win: %d,%d\n", result[1], result[2]);
+    fprintf(stderr, "depth: %d~\n", result[3]);
+    fprintf(stderr, "noFight: %d~\n", result[4]);
     for(int i=0; i < 48; i++){
         fprintf(stderr, "%d: %d..\n", i, result[5+i]);
     }
-
+    fprintf(stderr, "(%d, %d, %d, %d)\n", result[53], result[54], result[55], result[56]);
 
 	A.Display();
 	fprintf(stderr, "=============================\n");
@@ -487,7 +517,13 @@ int main() {
         C.cnt[i] = result[38+i];
 
     }
+    fprintf(stderr, "flip: %d\n", result[57]);
+    for(int i = 0; i < result[57]; i++){
+        fprintf(stderr, "<%d, %d>\n", result[58+2*i], result[59+2*i]);
+    }
+
     C.Display();
+    */
 
 /*
 	srand(Tick=GetTickCount());
