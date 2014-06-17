@@ -1,0 +1,39 @@
+# depslib dependency file v1.0
+1402762951 source:c:\users\bittor\desktop\pdp-final\search_block_parallelism\anqi_block_parallel\anqi.cc
+	<cassert>
+	<cstdio>
+	<cstdlib>
+	<cstring>
+	<windows.h>
+	"anqi.hh"
+
+1402675263 c:\users\bittor\desktop\pdp-final\search_block_parallelism\anqi_block_parallel\anqi.hh
+
+1403006200 source:c:\users\bittor\desktop\pdp-final\search_block_parallelism\anqi_block_parallel\main.cc
+	<cstdio>
+	<cstdlib>
+	<ctime>
+	<cmath>
+	<windows.h>
+	<CL/cl.h>
+	"anqi.hh"
+
+1403007296 source:c:\users\kai-hsiang\desktop\search_block_parallelism\anqi_block_parallel\anqi.cc
+	<cassert>
+	<cstdio>
+	<cstdlib>
+	<cstring>
+	<windows.h>
+	"anqi.hh"
+
+1403007295 c:\users\kai-hsiang\desktop\search_block_parallelism\anqi_block_parallel\anqi.hh
+
+1403015474 source:c:\users\kai-hsiang\desktop\search_block_parallelism\anqi_block_parallel\main.cc
+	<cstdio>
+	<cstdlib>
+	<ctime>
+	<cmath>
+	<windows.h>
+	<CL/cl.h>
+	"anqi.hh"
+
