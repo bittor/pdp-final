@@ -17,8 +17,8 @@
 
 #define MAX_SRCSIZE 8000
 
-#define FIRST_LEVEL_SIMULATION 1000
-#define OTHER_LEVEL_SIMULATION 100
+#define FIRST_LEVEL_SIMULATION 2000
+#define OTHER_LEVEL_SIMULATION 500
 #define ENABLE_PROFILING
 
 #define WORKITEM 128
@@ -374,17 +374,145 @@ double UCB(NODE *node, double c){
 }
 
 double standard_devia(NODE *node){
-   int L = node->Depth%2? node->W:node->L;
-   int W = node->Depth%2? node->L :node->W;
-   int D = node->D;
-   int Ni = W+L+D;
-   return pow(((double)(W+D/2) - (double)Ni * pow((double)(W+D/2)/Ni, 2))/Ni, 0.5);
+    Node *child;
+    int N = 0;
+    double x_mean_value = 0, x_square = 0;
+
+    child = node->child;
+    while(child != NULL){
+        double ucb = UCB(child, EXPLORE_PARA);
+
+        x_mean_value += ucb;
+        x_square += ucb*ucb;
+
+        N++;
+        child = child->siblg;
+    }
+
+    return sqrt((x_square/N)-(x_mean_value/N)*(x_mean_value/N));
+//   int L = node->Depth%2? node->W:node->L;
+//   int W = node->Depth%2? node->L :node->W;
+//   int D = node->D;
+//   int Ni = W+L+D;
+//   return pow(((double)(W+D/2) - (double)Ni * pow((double)(W+D/2)/Ni, 2))/Ni, 0.5);
+}
+
+void progressivePruning(NODE *parent)
+{
+    if(parent->W + parent->L + parent->D <= 1000)
+        return;
+
+    NODE *curNode, *prevNode;
+    double worstRightExpected = 100000000;
+
+    curNode = parent->child;
+    while(curNode != NULL){
+        if(curNode->child == NULL){
+            curNode = curNode->siblg;
+            continue;
+        }
+
+        Node *child = curNode->child;
+        int N = 0;
+        double x_mean_value = -1;
+
+        while(child != NULL){
+            x_mean_value += UCB(child, EXPLORE_PARA);
+
+            N++;
+            child = child->siblg;
+        }
+
+        double rightExpected = x_mean_value/N+2*standard_devia(curNode);
+        if(rightExpected < worstRightExpected){
+            worstRightExpected = rightExpected;
+            //curNode->posi->Display();
+            //fprintf(stderr, "%d \@ W/D/L: %d/%d/%d\n", curNode->Depth, curNode->W, curNode->D, curNode->L);
+        }
+
+        curNode = curNode->siblg;
+    }
+
+    prevNode = NULL;
+    curNode = parent->child;
+    while(curNode != NULL){
+        if(curNode->child == NULL){
+            prevNode = curNode;
+            curNode = curNode->siblg;
+            continue;
+        }
+
+        Node *child = curNode->child;
+        int N = 0;
+        double x_mean_value = -1;
+
+        while(child != NULL){
+            x_mean_value += UCB(child, EXPLORE_PARA);
+
+            N++;
+            child = child->siblg;
+        }
+
+        double leftExpected = x_mean_value/N-2*standard_devia(curNode);
+
+        if(leftExpected > worstRightExpected){
+            if(prevNode != NULL)
+                prevNode->siblg = curNode->siblg;
+            else
+                parent->child = curNode->siblg;
+            if(curNode->premove.st == 9 && curNode->premove.ed == 13){
+            fprintf(stderr, "Pruned :\n");
+            curNode->posi->Display();
+            fprintf(stderr, "%d \@ W/D/L: %d/%d/%d\n", curNode->Depth, curNode->W, curNode->D, curNode->L);
+
+            Node *tmp = curNode->child;
+            while(tmp != NULL){
+            fprintf(stderr, "curNode: W/D/L %d %d %d", tmp->W, tmp->D, tmp->L);
+            tmp = tmp->siblg;
+            }
+            int a;
+            scanf("%d", &a);
+            }
+#ifdef ENABLE_PROFILING
+                pruned++;
+#endif // ENABLE_PROFILING
+        }
+
+        prevNode = curNode;
+        curNode = curNode->siblg;
+    }
+
+
+//	       if(curNode->W + curNode->L + curNode->D > 1000 && best_child->W + best_child->L + best_child->D > 1000){
+//                LEO = (double)best_child->W/(best_child->W + best_child->L + best_child->D) - piii * standard_devia(best_child);
+//                REO = (double)curNode->W/(curNode->W + curNode->L + curNode->D) + piii * standard_devia(curNode);
+//                if(LEO > REO){  //prune current node
+//#ifdef ENABLE_PROFILING
+//                    pruned++;
+//#endif // ENABLE_PROFILING
+//                    if(preNode == parent) preNode->child = curNode->siblg;
+//                    else preNode->siblg = curNode->siblg;
+//                    free(curNode->posi);
+//                    free(curNode);
+//                    if(preNode == parent) curNode == parent->child;
+//                    else curNode == preNode->siblg;
+//                    }
+//                else{   //keep current node and move on
+//                    if(preNode == parent) preNode = preNode->child;
+//                    else preNode = preNode->siblg;
+//                    curNode = preNode->siblg;
+//                    }
+//            }
+//            else{
+//                if(preNode == parent) preNode = preNode->child;
+//                else preNode = preNode->siblg;
+//                curNode = preNode->siblg;
+//                }
 }
 
 /******************* bittuh's selection **********************/
 NODE *find_best_child(NODE *parent, double c){
 	int i = 0, k = 0, mm, nn, m, n;
-	double LEO, REO;
 	double ucb;
 
 	NODE *curNode;
@@ -403,37 +531,10 @@ NODE *find_best_child(NODE *parent, double c){
 	preNode = parent;
 	nextNode = curNode->siblg;
 
+    //progressivePruning(parent);
 	// PRUNE!!!!!!
 
-    if(parent->W + parent->L + parent->D > 10000){
-        while(curNode!= NULL){
-	       if(curNode->W + curNode->L + curNode->D > 1000 && best_child->W + best_child->L + best_child->D > 1000){
-                LEO = (double)best_child->W/(best_child->W + best_child->L + best_child->D) - piii * standard_devia(best_child);
-                REO = (double)curNode->W/(curNode->W + curNode->L + curNode->D) + piii * standard_devia(curNode);
-                if(LEO > REO){  //prune current node
-#ifdef ENABLE_PROFILING
-                    pruned++;
-#endif // ENABLE_PROFILING
-                    if(preNode == parent) preNode->child = curNode->siblg;
-                    else preNode->siblg = curNode->siblg;
-                    free(curNode->posi);
-                    free(curNode);
-                    if(preNode == parent) curNode == parent->child;
-                    else curNode == preNode->siblg;
-                    }
-                else{   //keep current node and move on
-                    if(preNode == parent) preNode = preNode->child;
-                    else preNode = preNode->siblg;
-                    curNode = preNode->siblg;
-                    }
-            }
-            else{
-                if(preNode == parent) preNode = preNode->child;
-                else preNode = preNode->siblg;
-                curNode = preNode->siblg;
-                }
-        }
-    }
+
 
 	return best_child;
 }
@@ -882,7 +983,7 @@ int main() {
 	BOARD BBB;
 
 	MOV mymove;
-	TimeOut=(BBB.LoadGame("board3.txt")-3)*1000;
+	TimeOut=(BBB.LoadGame("board.txt")-3)*1000;
 	totalPlay = 0;
 
 
@@ -892,7 +993,7 @@ int main() {
 
     NODE* bestNode;
 	if(!BBB.ChkLose()){
-        bestNode = ourParallelMCTSPlay(&BBB,EXPLORE_PARA);
+        bestNode = baseMCTSPlay(&BBB,EXPLORE_PARA);
         Output(mymove = bestNode->premove);
 	}
 

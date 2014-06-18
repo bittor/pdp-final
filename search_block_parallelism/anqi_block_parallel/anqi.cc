@@ -125,6 +125,7 @@ int BOARD::LoadGame(const char *fn) {
 
 	int r;
 	fscanf(fp," %*c%*s%d" ,&r);
+	r--;
 	who=(r==0||r==1?r:-1);
 	fscanf(fp," %*c%*s%d ",&r);
 
