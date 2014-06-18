@@ -441,7 +441,7 @@ NODE *find_best_child(NODE *parent, double c){
 
 
 /************************* bittuh's play ***********************/
-NODE* bittuhPlay(BOARD *brd, double c){
+NODE* baseMCTSPlay(BOARD *brd, double c){
 	root = (NODE*)malloc(sizeof(NODE));
 	NODE *curNode = root;
 	MOVLST lst;
@@ -499,7 +499,7 @@ NODE* bittuhPlay(BOARD *brd, double c){
 /**************************************************************/
 
 /****************** play with multi root ****************/
-NODE* bittuhPlay2(BOARD *brd, double c){
+NODE* rootParallelMCTSPlay(BOARD *brd, double c){
 	root = (NODE*)malloc(sizeof(NODE));
 	MOVLST lst;
 	int tempWin, tempLose, tempDraw;
@@ -591,7 +591,7 @@ NODE* bittuhPlay2(BOARD *brd, double c){
 }
 
 /***************** play with multi root and sort ****************/
-NODE* bittuhPlay3(BOARD *brd, double c){
+NODE* ourParallelMCTSPlay(BOARD *brd, double c){
 	root = (NODE*)malloc(sizeof(NODE));
 	MOVLST lst;
 	int tempWin, tempLose, tempDraw;
@@ -892,7 +892,7 @@ int main() {
 
     NODE* bestNode;
 	if(!BBB.ChkLose()){
-        bestNode = bittuhPlay3(&BBB,EXPLORE_PARA);
+        bestNode = ourParallelMCTSPlay(&BBB,EXPLORE_PARA);
         Output(mymove = bestNode->premove);
 	}
 
