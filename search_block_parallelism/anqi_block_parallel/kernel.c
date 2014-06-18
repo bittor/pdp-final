@@ -233,7 +233,7 @@ void Move(char *brd, char st, char ed, int *seed){
 }
 
 __kernel
-void simulate(const __constant int *brd, __global int *result){
+void simulate(const __constant char *brd, __global int *result){
 	const char ADJ[32][4]={
 	{ 1,-1,-1, 4},{ 2,-1, 0, 5},{ 3,-1, 1, 6},{-1,-1, 2, 7},
 	{ 5, 0,-1, 8},{ 6, 1, 4, 9},{ 7, 2, 5,10},{-1, 3, 6,11},
@@ -253,11 +253,16 @@ void simulate(const __constant int *brd, __global int *result){
 	char movelist[MAX_MOVELIST];
 	char fliplist[MAX_FLIPLIST];
 	int idx = get_global_id(0);
-	int seed = (int)(idx+1) * brd[48];
-	int numSimulate = brd[49];
+	char tmp[4];
+	tmp[0] = brd[49];
+	tmp[1] = brd[50];
+	tmp[2] = brd[51];
+	tmp[3] = brd[52];
+	int seed = (idx+1) * (*(int*)(tmp));
+	int numSimulate = brd[48];
 
 	for(char i = 0; i < BRD_TOTAL_SIZE; i++){
-		localBrd[i] = (char)brd[i];
+		localBrd[i] = brd[i];
 	}
 
 	int win, lose, draw;
