@@ -12,6 +12,8 @@
 #include<windows.h>
 #include<CL/cl.h>
 #include"anqi.hh"
+#include<sys/time.h>
+#include<omp.h>
 
 #define MAX_SRCSIZE 8000
 
@@ -19,14 +21,18 @@
 #define OTHER_LEVEL_SIMULATION 100
 #define ENABLE_PROFILING
 
-#define GPU_WORKITEM 1
+#define WORKITEM 32
+#define WORKITEM_SIMULATE 4
+#define MAX_GROUP_NUM 1
 #define RESULT_PER_WORKITEM 5
 
-#define BRDBUFFER_SIZE 48
+#define NUM_THREADS 16
+
+#define BRDBUFFER_SIZE 50
 
 #define PRINT_FIRST_LEVEL 1
 #define NOT_PRINT_FIRST_LEVEL 0
-#define EXPLORE_PARA 0.1
+#define EXPLORE_PARA 0.6
 
 static const int adj[32][4]={
 	{ 1,-1,-1, 4},{ 2,-1, 0, 5},{ 3,-1, 1, 6},{-1,-1, 2, 7},
@@ -39,15 +45,29 @@ static const int adj[32][4]={
 	{29,24,-1,-1},{30,25,28,-1},{31,26,29,-1},{-1,27,30,-1}
 };
 
+cl_event event;
+cl_mem bufBoard;
+cl_mem bufResult[NUM_THREADS];
+cl_command_queue cmdQueue;
+cl_kernel kernel;
+cl_program program;
+cl_context context;
+cl_uint numPlatforms;
+cl_platform_id *platforms;
+cl_uint numDevices;
+cl_device_id *devices;
+
 
 #ifdef ENABLE_PROFILING
 DWORD ENABLE_PROFILING_Tick;
 DWORD simulateTick;
 DWORD searchTick;
-int height;
+int tree_height;
 int drawCount;
 int highestSimulateDepth;
+long totalSimulateDepth;
 int pruned;
+NODE *root;
 #endif
 
 DWORD Tick;     // ¶}©l®É¨è
@@ -58,11 +78,168 @@ int totalPlay;
 bool TimesUp() {
 	return GetTickCount()-Tick>=TimeOut;
 }
-
+void clCmdProfilingStub(cl_event e){
+    cl_int status;
+    cl_ulong tSubmit, tStart, tEnd;
+    status = clGetEventProfilingInfo(e, CL_PROFILING_COMMAND_SUBMIT, sizeof(cl_ulong), &tSubmit, NULL);
+    status |= clGetEventProfilingInfo(e, CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &tStart, NULL);
+    status |= clGetEventProfilingInfo(e, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &tEnd, NULL);
+    if(status != CL_SUCCESS){
+        fprintf(stderr, "$:%d profile command execution time error in GPUSimulate...\n", status);
+    }
+    else{
+        fprintf(stderr, "* submit to start: %lu ms\n", (tStart-tSubmit)*1e-6);
+        fprintf(stderr, "* start to end   : %lu ms\n", (tEnd-tStart)*1e-6);
+    }
+}
 /********* bittuh's simulation ***************************/
 /* 0 if player of current board lose, 1 for win, 2 for draw */
-int bittuhSimulate(BOARD *brd) {
+void bittuhSimulate(BOARD *brd, const int numSimulation, int *win, int *lose, int *draw) {
+
+#ifdef ENABLE_PROFILING
     ENABLE_PROFILING_Tick = GetTickCount();
+#endif // ENABLE_PROFILING
+
+	const CLR player=brd->who;
+	int randn;
+	MOVLST lst;
+	BOARD tempBoard;
+    int simulateDepth;
+
+    *win = 0;
+    *lose = 0;
+    *draw = 0;
+
+    for(int i = 0; i < numSimulation; i++){
+        simulateDepth = 0;
+        memcpy(&tempBoard, brd, sizeof(BOARD));
+        while(!tempBoard.ChkLose()&&tempBoard.noFight<40){  // randomly play until win/lose/draw
+#ifdef ENABLE_PROFILING
+            simulateDepth++;
+            if(highestSimulateDepth < simulateDepth) highestSimulateDepth = simulateDepth;
+#endif
+            bittuhEatGen(tempBoard, lst);   //Eat as the highest priority
+            if(lst.num == 0){
+                    bittuhNotEatGen(tempBoard, lst);    //if no Eat, use other kinds
+            }
+            randn = rand()%lst.num;
+            tempBoard.Move(lst.mov[randn]);
+        }
+
+#ifdef ENABLE_PROFILING
+        simulateTick += GetTickCount()- ENABLE_PROFILING_Tick;
+#endif // ENABLE_PROFILING
+
+        if(!tempBoard.ChkLose()) *draw += 1;
+        else if(tempBoard.who == player) *win += 1;
+        else *lose += 1;
+    }
+
+}
+
+
+void bittuhGPUSimulate(BOARD *brd, int *win, int *lose, int *draw){
+
+    //copy brd to GPU buffer
+    int tid = omp_get_thread_num();
+    int tempArray[BRDBUFFER_SIZE];
+    tempArray[0] = brd->who;
+    for(int i = 0; i < 32; i++) tempArray[1+i] = brd->fin[i];
+    for(int i = 0; i < 14; i++) tempArray[33+i] = brd->cnt[i];
+    tempArray[47] = brd->noFight;
+    tempArray[48] = rand();
+    tempArray[49] = WORKITEM_SIMULATE;
+
+    cl_int status;
+    //bufBoard = clCreateBuffer(context, CL_MEM_READ_WRITE, BRDBUFFER_SIZE * sizeof(int), NULL, &status);
+    bufResult[0] = clCreateBuffer(context, CL_MEM_READ_WRITE, (WORKITEM * RESULT_PER_WORKITEM)*sizeof(int), NULL, &status);
+    status = clEnqueueWriteBuffer(cmdQueue, bufBoard, CL_TRUE, 0, BRDBUFFER_SIZE*sizeof(int), tempArray, 0, NULL, NULL);
+    if(status != CL_SUCCESS){
+        fprintf(stderr, "$:%d Write buffer in GPUSimulate fail...\n", status);
+        exit(1);
+    }
+
+    //kernel = clCreateKernel(program, "simulate", &status);
+    status |= clSetKernelArg(kernel, 0, sizeof(cl_mem), &bufBoard);
+    status |= clSetKernelArg(kernel, 1, sizeof(cl_mem), &bufResult[0]);
+    if(status != CL_SUCCESS){
+        fprintf(stderr, "$:%d Kernel creation error in GPUSimulate...\n", status);
+        exit(2);
+    }
+
+#ifdef ENABLE_PROFILING
+    ENABLE_PROFILING_Tick = GetTickCount();
+#endif // ENABLE_PROFILING
+
+
+    size_t globalWorkSize[1];
+	globalWorkSize[0] = WORKITEM;
+	for(int i = 0; i < MAX_GROUP_NUM; i++){
+        status = clEnqueueNDRangeKernel(cmdQueue, kernel, 1, NULL, globalWorkSize, NULL, 0, NULL, &event);
+        if(status != CL_SUCCESS){
+            fprintf(stderr, "$:%d enqueue kernel error in GPUSimulate...\n", status);
+            exit(3);
+        }
+
+	}
+	status = clWaitForEvents(1, &event);
+	if(status != CL_SUCCESS){
+        fprintf(stderr, "$:%d fail to wait for result in GPUSimulate...\n", status);
+        exit(4);
+	}
+
+	int result[WORKITEM * RESULT_PER_WORKITEM] = {0};
+	clEnqueueReadBuffer(cmdQueue, bufResult[0], CL_TRUE, 0, (RESULT_PER_WORKITEM * WORKITEM )*sizeof(int), result, 0, NULL, NULL);
+	if(status != CL_SUCCESS){
+        fprintf(stderr, "$:%d read result buffer error in GPUSimulate...\n", status);
+        exit(5);
+	}
+
+#ifdef ENABLE_PROFILING
+	simulateTick += GetTickCount()- ENABLE_PROFILING_Tick;
+#endif // DEBUG
+
+	*draw = 0;
+    *win = 0;
+    *lose = 0;
+    int depthsum = 0;
+    for(int i = 0; i < WORKITEM; i++){
+        *draw += result[RESULT_PER_WORKITEM*i];
+        *win += result[RESULT_PER_WORKITEM*i+1];
+        *lose += result[RESULT_PER_WORKITEM*i+2];
+        #ifdef ENABLE_PROFILING
+        if(highestSimulateDepth < result[RESULT_PER_WORKITEM*i+4])highestSimulateDepth = result[RESULT_PER_WORKITEM*i+4];
+        #endif // ENABLE_PROFILING
+    }
+    fprintf(stderr, "%d/%d/%d\n", *win, *lose, *draw);
+
+}
+NODE *createNode(NODE* parent, MOV mv){
+        NODE *newNode = (NODE*)malloc(sizeof(NODE));
+		newNode->posi = (BOARD*)malloc(sizeof(BOARD));
+		memcpy(newNode->posi, parent->posi, sizeof(BOARD));
+		newNode->parent = parent;
+		newNode->child = NULL;
+		newNode->siblg = NULL;
+		newNode->Depth = parent->Depth + 1;
+#ifdef ENABLE_PROFILING
+		if(newNode->Depth > tree_height){
+                tree_height = newNode->Depth;
+		}
+#endif
+		newNode->premove = mv;
+		newNode->posi->Move(mv);
+		newNode->W = 0;
+		newNode->L = 0;
+		newNode->D = 0;
+
+		return newNode;
+}
+
+int bittuhSimulateOld(BOARD *brd) {
+#ifdef ENABLE_PROFILING
+    ENABLE_PROFILING_Tick = GetTickCount();
+#endif // ENABLE_PROFILING
 	const CLR player=brd->who;
 	int randn;
 	MOVLST lst;
@@ -100,7 +277,51 @@ int bittuhSimulate(BOARD *brd) {
 }
 
 /************** bittuh's expansion ********************/
-void explore(NODE *parent, const int numSimulation, int *parent_WIN, int *parent_LOSE){ //return number of wins of parent node board
+void explore(NODE *parent, const int numSimulation, int *parent_WIN, int *parent_LOSE, int *parent_DRAW){
+	int i, j;
+	NODE *curNode, *newNode;
+	MOVLST legal_moves;
+    NODE *temp = parent;
+
+	bittuhAllMoveGen(*(parent->posi), legal_moves);
+
+    *parent_WIN = 0;
+    *parent_LOSE = 0;
+    *parent_DRAW = 0;
+
+	// for all legal moves, add a new node to the game tree
+	for(i = 0; i < legal_moves.num; i++){
+
+        newNode = createNode(parent, legal_moves.mov[i]);
+
+		/*************simulate****************/
+		int win, lose, draw;
+		bittuhSimulate(newNode->posi, numSimulation, &win, &lose, &draw);
+		newNode->L += win;
+		*parent_WIN += win;
+		newNode->W += lose;
+		*parent_LOSE += lose;
+		newNode->D += draw;
+		*parent_DRAW += draw;
+		totalPlay += win+lose+draw;
+
+		/**************************************/
+		if(i == 0){
+			parent->child = newNode;
+			curNode = parent->child;
+		}
+		else{
+			curNode->siblg = newNode;
+			curNode = curNode->siblg;
+		}
+
+	}
+
+	if(parent == NULL) fprintf(stderr, "<wtf?>\n");
+
+}
+
+void explore2(NODE *parent, const int numSimulation, int *parent_WIN, int *parent_LOSE, int *parent_DRAW){
 	int i, j;
 	NODE *curNode, *newNode;
 	MOVLST legal_moves;
@@ -109,42 +330,24 @@ void explore(NODE *parent, const int numSimulation, int *parent_WIN, int *parent
 
     *parent_WIN = 0;
     *parent_LOSE = 0;
+    *parent_DRAW = 0;
 	// for all legal moves, add a new node to the game tree
 	for(i = 0; i < legal_moves.num; i++){
-		newNode = (NODE*)malloc(sizeof(NODE));
-		newNode->posi = (BOARD*)malloc(sizeof(BOARD));
-		memcpy(newNode->posi, parent->posi, sizeof(BOARD));
-		newNode->parent = parent;
-		newNode->child = NULL;
-		newNode->siblg = NULL;
-		newNode->Depth = parent->Depth + 1;
-#ifdef ENABLE_PROFILING
-		if(newNode->Depth > height){
-                height = newNode->Depth;
-		}
-#endif
-		newNode->premove = legal_moves.mov[i];
-		newNode->posi->Move(legal_moves.mov[i]);
-		newNode->W = 0;
-		newNode->L = 0;
-		newNode->D = 0;
+
+		newNode = createNode(parent, legal_moves.mov[i]);
 
 		/*************simulate****************/
-		for(j = 0; j < numSimulation; j++){
-            int simulatResult = bittuhSimulate(newNode->posi);
-			if(simulatResult == 0){
-				newNode->L++;
-				*parent_WIN+=1;
-			}
-			else if(simulatResult == 1){
-                newNode->W++;
-                *parent_LOSE+=1;
-			}
-			else
-                newNode->D++;
-			totalPlay++;
-		}
+		int win, lose, draw;
+		bittuhGPUSimulate(newNode->posi, &win, &lose, &draw);
+		newNode->L += win;
+		*parent_WIN += win;
+		newNode->W += lose;
+		*parent_LOSE += lose;
+		newNode->D += draw;
+		*parent_DRAW += draw;
+		totalPlay += win+lose+draw;
 		/**************************************/
+		// to next sibling
 		if(i == 0){
 			parent->child = newNode;
 			curNode = parent->child;
@@ -177,9 +380,8 @@ double standard_devia(NODE *node){
    return pow(((double)(W+D/2) - (double)Ni * pow((double)(W+D/2)/Ni, 2))/Ni, 0.5);
 }
 
-
 /******************* bittuh's selection **********************/
-NODE *find_best_child(NODE *parent, double c, int profile_flag){
+NODE *find_best_child(NODE *parent, double c){
 	int i = 0, k = 0, mm, nn, m, n;
 	double LEO, REO;
 	double ucb;
@@ -189,22 +391,12 @@ NODE *find_best_child(NODE *parent, double c, int profile_flag){
 	double best_score = UCB(parent->child, c);
 	NODE *best_child = parent->child;
 	for(curNode = parent->child; curNode!= NULL ;curNode = curNode->siblg){
-        if(profile_flag == PRINT_FIRST_LEVEL)
-            fprintf(stderr, "%d->%d: %d/%d/%d, %.2f/%.2f/%.2f <%.3f>\n",
-                    curNode->premove.st, curNode->premove.ed,
-                    curNode->W, curNode->L, curNode->D,
-                    (double)curNode->W/(double)(curNode->W+curNode->L+curNode->D),
-                    (double)curNode->L/(double)(curNode->W+curNode->L+curNode->D),
-                    (double)curNode->D/(double)(curNode->W+curNode->L+curNode->D),
-                    UCB(curNode, c));
-
 		ucb = UCB(curNode, c);
 		if(best_score <= ucb){
 			best_score = ucb;
 			best_child = curNode;
 		}
 	}
-
 
 	curNode = parent->child;
 	preNode = parent;
@@ -218,7 +410,9 @@ NODE *find_best_child(NODE *parent, double c, int profile_flag){
                 LEO = (double)best_child->W/(best_child->W + best_child->L + best_child->D) - piii * standard_devia(best_child);
                 REO = (double)curNode->W/(curNode->W + curNode->L + curNode->D) + piii * standard_devia(curNode);
                 if(LEO > REO){  //prune current node
+#ifdef ENABLE_PROFILING
                     pruned++;
+#endif // ENABLE_PROFILING
                     if(preNode == parent) preNode->child = curNode->siblg;
                     else preNode->siblg = curNode->siblg;
                     free(curNode->posi);
@@ -240,47 +434,46 @@ NODE *find_best_child(NODE *parent, double c, int profile_flag){
         }
     }
 
-
 	return best_child;
 }
-/*********************************************************/
+/***************************************************************/
 
 
-/*********** bittuh's play **************/
+/************************* bittuh's play ***********************/
 NODE* bittuhPlay(BOARD *brd, double c){
-	NODE *root = (NODE*)malloc(sizeof(NODE));
+	root = (NODE*)malloc(sizeof(NODE));
 	NODE *curNode = root;
 	MOVLST lst;
-	int tempWin, tempLose, tempTotal;
+	int tempWin, tempLose, tempDraw;
 	int i, old_totalPlay, k = 0;
 	root->parent = NULL;
 	root->siblg = NULL;
 	root->child = NULL;
 	root->posi = brd;
 	root->Depth = 0;
-	explore(root, FIRST_LEVEL_SIMULATION, &tempWin, &tempLose);
-	//if(tempWin == 0 || tempLose == 0) fprintf(stderr, "fuck\n");
+	explore2(root, FIRST_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
 	root->W = tempWin;
 	root->L = tempLose;
-	root->D = totalPlay - tempWin - tempLose;
+	root->D = tempDraw;
 
 	// tree-growing loop
 	while(GetTickCount()-Tick < TimeOut){
 		/********* selection ***********/
 		curNode = root;
+#ifdef ENABLE_PROFILING
 		ENABLE_PROFILING_Tick = GetTickCount();
+#endif // ENABLE_PROFILING
 		while(curNode->child != NULL){
-			curNode = find_best_child(curNode, c, NOT_PRINT_FIRST_LEVEL);
+			curNode = find_best_child(curNode, c);
 		}
+#ifdef ENABLE_PROFILING
 		searchTick += GetTickCount() - ENABLE_PROFILING_Tick;
+#endif // ENABLE_PROFILING
 
-		old_totalPlay = totalPlay;
 		/******* expansion & simulation *******/
-		explore(curNode, OTHER_LEVEL_SIMULATION, &tempWin, &tempLose);
-		//if(tempWin == 0 || tempLose == 0) fprintf(stderr, "fuck\n");
-		//fprintf(stderr, "~~curNode: %d, %d\n", curNode->W, curNode->W+curNode->L+curNode->D);
+		explore2(curNode, OTHER_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
+
 		/********* back propogation **********/
-		tempTotal = totalPlay - old_totalPlay;
 		for(k = 0; curNode != NULL; k++){
 			if(k%2 == 0){
 				curNode->W += tempWin;
@@ -290,96 +483,156 @@ NODE* bittuhPlay(BOARD *brd, double c){
 				curNode->L += tempWin;
 				curNode->W += tempLose;
 			}
-			curNode->D += tempTotal - tempWin - tempLose;
-            //fprintf(stderr, "~~curNode: %d, %d\n", curNode->W, curNode->W+curNode->L+curNode->D);
+			curNode->D += tempDraw;
 			curNode = curNode->parent;
 		}
 		/**************************************/
 	}
 
 	//give out final answer
-	curNode = find_best_child(root, c, PRINT_FIRST_LEVEL);
+	curNode = find_best_child(root, c);
+
 	return curNode;
 
 }
-/**************************************************/
+/**************************************************************/
 
-/********** play with block parallelism ****************/
+/****************** play with multi root ****************/
 NODE* bittuhPlay2(BOARD *brd, double c){
-	NODE *root = (NODE*)malloc(sizeof(NODE));
-	NODE *curNode = root;
+	root = (NODE*)malloc(sizeof(NODE));
 	MOVLST lst;
-	int tempWin, tempLose, tempTotal;
+	int tempWin, tempLose, tempDraw;
 	int i, old_totalPlay, k = 0;
 	root->parent = NULL;
 	root->siblg = NULL;
 	root->child = NULL;
 	root->posi = brd;
 	root->Depth = 0;
-	explore(root, FIRST_LEVEL_SIMULATION, &tempWin, &tempLose);
-	//if(tempWin == 0 || tempLose == 0) fprintf(stderr, "fuck\n");
+	explore(root, FIRST_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
+
 	root->W = tempWin;
 	root->L = tempLose;
-	root->D = totalPlay - tempWin - tempLose;
+	root->D = tempDraw;
 
-    NODE *subroot;
-    for(subroot = root->child; subroot != NULL; subroot = subroot->siblg){
-        old_totalPlay = totalPlay;
-        explore(subroot, OTHER_LEVEL_SIMULATION, &tempWin, &tempLose);
-        tempTotal = totalPlay - old_totalPlay;
-        subroot->W += tempWin;
-        subroot->L += tempLose;
-        subroot->D += tempTotal - tempWin - tempLose;
-        root->W += tempLose;
-        root->L += tempWin;
-        root->D += tempTotal - tempWin - tempLose;
+
+    int rootCount = 0;
+    NODE *temproot;
+    for(temproot = root->child; temproot != NULL; temproot = temproot->siblg) rootCount++;
+    NODE **subroot = (NODE**)malloc(sizeof(NODE*)*rootCount);
+
+    temproot = root->child;
+    for(int i = 0; i < rootCount; i++){
+        subroot[i] = temproot;
+        temproot = temproot->siblg;
     }
-	// tree-growing loop
-	while(GetTickCount()-Tick < TimeOut){
 
-        for(subroot = root->child; subroot != NULL; subroot = subroot->siblg){
-            /********* selection ***********/
-
-            curNode = subroot;
-            ENABLE_PROFILING_Tick = GetTickCount();
-            while(curNode->child != NULL){
-                curNode = find_best_child(curNode, c, NOT_PRINT_FIRST_LEVEL);
-            }
-            searchTick += GetTickCount() - ENABLE_PROFILING_Tick;
-
-            old_totalPlay = totalPlay;
-            /******* expansion & simulation *******/
-            explore(curNode, OTHER_LEVEL_SIMULATION, &tempWin, &tempLose);
-            //if(tempWin == 0 || tempLose == 0) fprintf(stderr, "fuck\n");
-            //fprintf(stderr, "~~curNode: %d, %d\n", curNode->W, curNode->W+curNode->L+curNode->D);
-            /********* back propogation **********/
-            tempTotal = totalPlay - old_totalPlay;
-            for(k = 0; curNode != NULL; k++){
-                if(k%2 == 0){
-                    curNode->W += tempWin;
-                    curNode->L += tempLose;
-                }
-                else{
-                    curNode->L += tempWin;
-                    curNode->W += tempLose;
-                }
-                curNode->D += tempTotal - tempWin - tempLose;
-                //fprintf(stderr, "~~curNode: %d, %d\n", curNode->W, curNode->W+curNode->L+curNode->D);
-                curNode = curNode->parent;
+    #pragma omp parallel num_threads(NUM_THREADS)
+    {
+        #pragma omp for private(tempWin, tempLose, tempDraw, i) schedule(dynamic,1)
+        //for(temproot = root->child; temproot != NULL; temproot = temproot->siblg){
+        for(int i = 0; i < rootCount; i++){
+            explore(subroot[i], OTHER_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
+            subroot[i]->W += tempWin;
+            subroot[i]->L += tempLose;
+            subroot[i]->D += tempDraw;
+            #pragma omp critical
+            {
+                root->W += tempLose;
+                root->L += tempWin;
+                root->D += tempDraw;
             }
         }
-		/**************************************/
+    }
+
+	// tree-growing loop
+	#pragma omp parallel num_threads(16)
+	{
+        #pragma omp for private(tempWin, tempLose, tempDraw, i) schedule(dynamic,1)
+        for(int i = 0; i < rootCount; i++){
+            NODE *curNode;
+            while(GetTickCount()-Tick < TimeOut){
+                curNode = subroot[i];
+                #ifdef ENABLE_PROFILING
+                ENABLE_PROFILING_Tick = GetTickCount();
+                #endif // ENABLE_PROFILING
+                int level = 0;
+                while(curNode->child != NULL){
+                    level++;
+                    curNode = find_best_child(curNode, c);
+                }
+                #ifdef ENABLE_PROFILING
+                searchTick += GetTickCount() - ENABLE_PROFILING_Tick;
+                #endif // ENABLE_PROFILING
+
+                explore(curNode, OTHER_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
+
+                #pragma omp critical
+                {
+                    for(k = 0; curNode != NULL; k++){
+                        if(k%2 == 0){
+                            curNode->W += tempWin;
+                            curNode->L += tempLose;
+                        }
+                        else{
+                            curNode->L += tempWin;
+                            curNode->W += tempLose;
+                        }
+                        curNode->D += tempDraw;
+                        curNode = curNode->parent;
+                    }
+                }
+            }
+        }
 	}
 
+
 	//give out final answer
-	curNode = find_best_child(root, c, PRINT_FIRST_LEVEL);
-	return curNode;
+	return find_best_child(root, c);
 
 }
 
+#ifdef ENABLE_PROFILING
+void initProfilingInfo(){
+	simulateTick = 0;
+	drawCount = 0;
+	tree_height = 0;
+	highestSimulateDepth = 0;
+	totalSimulateDepth = 0;
+	searchTick = 0;
+	pruned = 0;
+}
 
-int main() {
+void showProfilingInfo(){
+    NODE *curNode;
+    fprintf(stderr, "================== Profling Info ===============\n");
+    if(root != NULL){
+    for(curNode = root->child; curNode!= NULL ;curNode = curNode->siblg){
+        //fprintf(stderr, "%d/%d/%d\n", curNode->W, curNode->L, curNode->D);
 
+
+        fprintf(stderr, "%d->%d: %d/%d/%d=%d, %.2f/%.2f/%.2f <%.3f>\n",
+            curNode->premove.st, curNode->premove.ed,
+            curNode->W, curNode->L, curNode->D, curNode->W+curNode->L+curNode->D,
+            (double)curNode->W/(double)(curNode->W+curNode->L+curNode->D),
+            (double)curNode->L/(double)(curNode->W+curNode->L+curNode->D),
+            (double)curNode->D/(double)(curNode->W+curNode->L+curNode->D),
+            UCB(curNode, EXPLORE_PARA));
+
+    }
+    }
+    fprintf(stderr, "total simulate %d times, <%d>.\n", totalPlay, root->W+root->L+root->D);
+    fprintf(stderr, "tree height:%d\n", tree_height);
+    fprintf(stderr, "pruned %d nodes\n", pruned);
+    fprintf(stderr, "avg simulate moves: %ld\n", totalSimulateDepth/totalPlay);
+    fprintf(stderr, "highest simulate moves in one iteration: %d\n", highestSimulateDepth);
+    fprintf(stderr, "spend %ld to simulate\n", simulateTick);
+    fprintf(stderr, "spend %ld to search\n", searchTick);
+    fprintf(stderr,"\n");
+    fprintf(stderr, "================================================\n");
+}
+#endif // ENABLE_PROFILING
+
+void initOpenCL(){
     FILE *fp;
     fp = fopen("kernel.c", "r");
     size_t srcsize;
@@ -389,41 +642,89 @@ int main() {
     fclose(fp);
     fprintf(stderr, "...%d\n", srcsize);
 
-
-
     //OpenCL setup
 
     cl_int status;
 
 	/* get platform */
-	cl_uint numPlatforms = 0;
+    numPlatforms = 0;
 	status = clGetPlatformIDs(0, NULL, &numPlatforms);
 	if(status != CL_SUCCESS)
 		fprintf(stderr, "error when get platform number\n");
-	cl_platform_id *platforms = NULL;
+	platforms = NULL;
 	platforms = (cl_platform_id*)malloc(numPlatforms*sizeof(cl_platform_id));
 	status = clGetPlatformIDs(numPlatforms, platforms, NULL);
 	if(status != CL_SUCCESS)
 		fprintf(stderr, "error when get platform ID\n");
 
     /* get device */
-	cl_uint numDevices = 0;
+
+	numDevices = 0;
 	status = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_ALL, 0, NULL, &numDevices);
 	if(status != CL_SUCCESS)
 		fprintf(stderr, "error when get device number\n");
-	cl_device_id *devices;
+
 	devices = (cl_device_id*)malloc(numDevices*sizeof(cl_device_id));
 	status = clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_ALL, numDevices, devices, NULL);
-	if(status != CL_SUCCESS)
-		fprintf(stderr, "error when get device ID\n");
+	if(status != CL_SUCCESS) fprintf(stderr, "$:%d error when get device ID...\n", status);
 
+    for(int i = 0; i < numDevices; i++){
+
+        char *dvcInfo;
+        cl_uint maxComputeUnits, maxDim;
+        cl_ulong globmemsize, localmemsize, maxConstantBuf;
+        size_t valueSize, maxWorkGroupSize, maxWorkItemSize[3];
+        // print device name
+        clGetDeviceInfo(devices[i], CL_DEVICE_NAME, 0, NULL, &valueSize);
+        dvcInfo = (char*) malloc(valueSize);
+        clGetDeviceInfo(devices[i], CL_DEVICE_NAME, valueSize, dvcInfo, NULL);
+        printf("## Device [%s]\n", dvcInfo);
+        free(dvcInfo);
+
+        clGetDeviceInfo(devices[i], CL_DEVICE_VENDOR, 0, NULL, &valueSize);
+        dvcInfo = (char*) malloc(valueSize);
+        clGetDeviceInfo(devices[i], CL_DEVICE_VENDOR, valueSize, dvcInfo, NULL);
+        printf("   Vendored by \"%s\"\n", dvcInfo);
+        free(dvcInfo);
+
+        // print parallel compute units
+        clGetDeviceInfo(devices[i], CL_DEVICE_MAX_COMPUTE_UNITS,
+        sizeof(maxComputeUnits), &maxComputeUnits, NULL);
+        printf(" + Parallel compute units: %u\n", maxComputeUnits);
+
+        // print hardware device version
+        clGetDeviceInfo(devices[i], CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(globmemsize), &globmemsize, NULL);
+        printf(" + Global Memory Size: %lu bytes\n", globmemsize);
+
+        // print hardware device version
+        clGetDeviceInfo(devices[i], CL_DEVICE_LOCAL_MEM_SIZE, sizeof(localmemsize), &localmemsize, NULL);
+        printf(" + Local Memory Size: %lu bytes\n", localmemsize);
+
+        // print hardware device version
+        clGetDeviceInfo(devices[i], CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE, sizeof(maxConstantBuf), &maxConstantBuf, NULL);
+        printf(" + Max Constant Memory Size: %lu bytes\n", maxConstantBuf);
+
+        // print hardware device version
+        clGetDeviceInfo(devices[i], CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(maxWorkGroupSize), &maxWorkGroupSize, NULL);
+        printf(" + Max Work Group Size: %zu \n", maxWorkGroupSize);
+
+        // print hardware device version
+        clGetDeviceInfo(devices[i], CL_DEVICE_MAX_WORK_ITEM_DIMENSIONS, sizeof(maxDim), &maxDim, NULL);
+        clGetDeviceInfo(devices[i], CL_DEVICE_MAX_WORK_ITEM_SIZES, maxDim*sizeof(size_t), &maxWorkItemSize, NULL);
+        printf(" + Max Work Items Size in all %u dimension: ", maxDim);
+        for(int j = 0; j < maxDim; j++) printf("%zu ", maxWorkItemSize[j]);
+        printf("\n");
+
+
+
+    }
     /* context */
-    cl_context context;
+
 	context = clCreateContext(NULL, numDevices, devices, NULL, NULL, &status);
 	if(status != CL_SUCCESS) fprintf(stderr, "context create err\n");
 
     /* command queue */
-	cl_command_queue cmdQueue;
+
 	cmdQueue = clCreateCommandQueue(context, devices[0], CL_QUEUE_PROFILING_ENABLE, &status);
 	if(status != CL_SUCCESS) fprintf(stderr, "command queue create err\n");
 
@@ -431,7 +732,7 @@ int main() {
     /* program */
     char msg[4096];
     size_t len;
-    cl_program program = clCreateProgramWithSource(context, 1, (const char**)&kernelsrc, (const size_t*)&srcsize, &status);
+    program = clCreateProgramWithSource(context, 1, (const char**)&kernelsrc, (const size_t*)&srcsize, &status);
 
 	if(status != CL_SUCCESS) fprintf(stderr, "create program error\n");
 	status = clBuildProgram(program, numDevices, devices, NULL, NULL, NULL);
@@ -441,17 +742,31 @@ int main() {
         fprintf(stderr, "%d\n%s\n", status, msg);
     }
 
-    cl_mem bufBoard = clCreateBuffer(context, CL_MEM_READ_ONLY, BRDBUFFER_SIZE*sizeof(int), NULL, &status);
+    //create CL memory buffer object
+    bufBoard = clCreateBuffer(context, CL_MEM_READ_ONLY, BRDBUFFER_SIZE*sizeof(int), NULL, &status);
     if(status != CL_SUCCESS) fprintf(stderr, "fuck1!\n");
-    cl_mem bufResult = clCreateBuffer(context, CL_MEM_READ_WRITE, (GPU_WORKITEM * RESULT_PER_WORKITEM+200)*sizeof(int), NULL, &status);
-    if(status != CL_SUCCESS) fprintf(stderr, "fuck2!\n");
-    //cl_mem bufADJ = clCreateBuffer(context, CL_MEM_READ_WRITE, 32*4*sizeof(int), NULL, &status);
-    //if(status != CL_SUCCESS) fprintf(stderr, "fuck2_2!\n");
+    for(int i = 0; i < MAX_GROUP_NUM; i++){
+        bufResult[i] = clCreateBuffer(context, CL_MEM_READ_WRITE, (WORKITEM * RESULT_PER_WORKITEM)*sizeof(int), NULL, &status);
+        if(status != CL_SUCCESS){
+            fprintf(stderr, "fuck2!\n");
+            return;
+        }
+    }
 
+    kernel = clCreateKernel(program, "simulate", &status);
+}
 
+int main() {
+
+    initOpenCL();
+
+/*
     BOARD A;
     A.LoadGame("board4.txt");
-    A.Display();
+    BOARD B;
+    B.LoadGame("board3.txt");
+    BOARD C;
+    C.LoadGame("board2.txt");
     int brdarray[48];
     brdarray[0] = A.who;
     for(int i = 0; i < 32; i++){
@@ -468,19 +783,19 @@ int main() {
     //if(status != CL_SUCCESS) fprintf(stderr, "fuck3_1!\n");
 
 
-    cl_kernel kernel = clCreateKernel(program, "simulate", &status);
+    kernel = clCreateKernel(program, "simulate", &status);
     if(status != CL_SUCCESS) fprintf(stderr, "fuck4! %d\n", status);
     status = clSetKernelArg(kernel, 0, sizeof(cl_mem), &bufBoard);
     if(status != CL_SUCCESS) fprintf(stderr, "fuck5! %d\n", status);
-    status = clSetKernelArg(kernel, 1, sizeof(cl_mem), &bufResult);
+    status = clSetKernelArg(kernel, 1, sizeof(cl_mem), &bufResult[0]);
     if(status != CL_SUCCESS) fprintf(stderr, "fuck6! %d\n", status);
     //status = clSetKernelArg(kernel, 1, sizeof(cl_mem), &bufADJ);
     //if(status != CL_SUCCESS) fprintf(stderr, "fuck6! %d\n", status);
 
     size_t globalWorkSize[1];
-	globalWorkSize[0] = GPU_WORKITEM;
+	globalWorkSize[0] = WORKITEM;
 	fprintf(stderr, "enqueu work\n");
-	for(int i = 0; i < 1; i++){
+	for(int i = 0; i < MAX_GROUP_NUM; i++){
         status = clEnqueueNDRangeKernel(cmdQueue, kernel, 1, NULL, globalWorkSize, NULL, 0, NULL, NULL);
         if(status != CL_SUCCESS) fprintf(stderr, "fuck7! %d\n", status);
 
@@ -488,23 +803,25 @@ int main() {
 	status = clFinish(cmdQueue);
 
 
-	int result[GPU_WORKITEM * RESULT_PER_WORKITEM+200] = {0};
-	clEnqueueReadBuffer(cmdQueue, bufResult, CL_TRUE, 0, (RESULT_PER_WORKITEM * GPU_WORKITEM + 200)*sizeof(int), result, 0, NULL, NULL);
+	int result[WORKITEM * RESULT_PER_WORKITEM+200] = {0};
+	clEnqueueReadBuffer(cmdQueue, bufResult[0], CL_TRUE, 0, (RESULT_PER_WORKITEM * WORKITEM + 200)*sizeof(int), result, 0, NULL, NULL);
 	if(status != CL_SUCCESS) fprintf(stderr, "fuck8!\n");
 
     int draw = 0;
     int win = 0;
     int lose = 0;
-    for(int i = 0; i < GPU_WORKITEM; i++){
+    for(int i = 0; i < WORKITEM; i++){
         draw += result[RESULT_PER_WORKITEM*i];
         win += result[RESULT_PER_WORKITEM*i+1];
         lose += result[RESULT_PER_WORKITEM*i+2];
-        fprintf(stderr, "<%d,", result[RESULT_PER_WORKITEM*i]);
-        fprintf(stderr, "%d,", result[RESULT_PER_WORKITEM*i+1]);
-        fprintf(stderr, "%d>\n", result[RESULT_PER_WORKITEM*i+2]);
+        //fprintf(stderr, "<%d,", result[RESULT_PER_WORKITEM*i]);
+        //fprintf(stderr, "%d,", result[RESULT_PER_WORKITEM*i+1]);
+        //fprintf(stderr, "%d>\n", result[RESULT_PER_WORKITEM*i+2]);
     }
     fprintf(stderr, "%d/%d/%d\n", draw, win, lose);
 
+*/
+    /*
     fprintf(stderr, "who: %d\n", result[5]);
     for(int i=1; i < 48; i++){
         fprintf(stderr, "%d: %d..\n", i, result[5+i]);
@@ -526,48 +843,38 @@ int main() {
     }
 
     C.Display();
-
-
-/*
-	srand(Tick=GetTickCount());
-
-	BOARD B;
-	NODE* bestNode;
-	MOV mymove;
-	TimeOut=(B.LoadGame("board.txt")-3)*1000;
-	totalPlay = 0;
-
+    */
 #ifdef ENABLE_PROFILING
-	simulateTick = 0;
-	drawCount = 0;
-	height = 0;
-	highestSimulateDepth = 0;
-	searchTick = 0;
-	pruned = 0;
-#endif
-
-	B.Display();
-
-	if(!B.ChkLose()){
-        bestNode = bittuhPlay2(&B,EXPLORE_PARA);
-        Output(mymove = bestNode->premove);
-	}
-#ifdef ENABLE_PROFILING
-    B.Move(mymove);
-    fprintf(stderr, "=================================\n");
-    fprintf(stderr, "play done, total simulate %d times, draw %d.\n", totalPlay, drawCount);
-    fprintf(stderr, "tree height:%d\n", height);
-    fprintf(stderr, "pruned %d nodes\n", pruned);
-    fprintf(stderr, "highest simulate moves in one iteration: %d\n", highestSimulateDepth);
-    fprintf(stderr, "spend %ld in %ld ticks to simulate\n", simulateTick, GetTickCount()-Tick);
-    fprintf(stderr, "spend %ld in %ld ticks to search\n", searchTick, GetTickCount()-Tick);
-    fprintf(stderr,"\n");
-    B.Display();
+    initProfilingInfo();
 #endif // ENABLE_PROFILING
 
-    if(mymove.st != mymove.ed)fprintf(stderr,"best: %d->%d",mymove.st, mymove.ed);
-    else fprintf(stderr,"best: flip %d",mymove.st);
-*/	scanf("%d");
+	srand(Tick=GetTickCount());
+
+	BOARD BBB;
+
+	MOV mymove;
+	TimeOut=(BBB.LoadGame("board4.txt")-3)*1000;
+	totalPlay = 0;
+
+
+    struct timeval  tv1, tv2;
+    gettimeofday(&tv1, NULL);
+	BBB.Display();
+
+    NODE* bestNode;
+	if(!BBB.ChkLose()){
+        bestNode = bittuhPlay(&BBB,EXPLORE_PARA);
+        Output(mymove = bestNode->premove);
+	}
+
+#ifdef ENABLE_PROFILING
+    showProfilingInfo();
+#endif // ENABLE_PROFILING
+
+    if(mymove.st != mymove.ed)fprintf(stderr,"best: %d->%d\n",mymove.st, mymove.ed);
+    else fprintf(stderr,"best: flip %d\n",mymove.st);
+    BBB.Display();
+	scanf("%d");
 
 	return 0;
 }
