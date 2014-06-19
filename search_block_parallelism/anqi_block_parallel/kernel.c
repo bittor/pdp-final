@@ -308,14 +308,15 @@ void simulate(const __constant char *brd, __global int *result){
 			lose++;	//opponent lose
 		}
 
-		
-
 		//result[idx*RESULT_PER_WORKITEM+3] += depth;
 		if(highestdepth < depth) highestdepth = depth;
 	}
 	result[idx*RESULT_PER_WORKITEM] = draw;
 	result[idx*RESULT_PER_WORKITEM+1] = win;
 	result[idx*RESULT_PER_WORKITEM+2] = lose;
+	//result[idx*RESULT_PER_WORKITEM] = 128;
+	//result[idx*RESULT_PER_WORKITEM+1] = 128;
+	//result[idx*RESULT_PER_WORKITEM+2] = 128;
 	result[idx*RESULT_PER_WORKITEM+4] = highestdepth;
 
 
