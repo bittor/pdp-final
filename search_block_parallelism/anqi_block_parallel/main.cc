@@ -17,13 +17,21 @@
 
 #define MAX_SRCSIZE 8000
 
+
+
+#define USING_GPU_SIMULATE
+#define USING_CPU_SIMULATE
+
+#define USING_BASE_MCTS
+#define USING_ROOTPARA_MCTS
+#define USING_OUR_MCTS
+
 #define FIRST_LEVEL_SIMULATION 2000
 #define OTHER_LEVEL_SIMULATION 500
-#define ENABLE_PROFILING
 
 #define WORKITEM 16
 #define WORKITEM_SIMULATE 64
-#define FIRST_LVL_GPU_SIMULATE 128
+#define FIRST_LVL_GPU_SIMULATE 64
 #define OTHER_LVL_GPU_SIMULATE 16
 #define MAX_GROUP_NUM 1
 #define RESULT_PER_WORKITEM 5
@@ -32,10 +40,9 @@
 
 #define BRDBUFFER_SIZE 53
 
-#define PRINT_FIRST_LEVEL 1
-#define NOT_PRINT_FIRST_LEVEL 0
 #define EXPLORE_PARA 0.6
 
+#define ENABLE_PROFILING
 static const int adj[32][4]={
 	{ 1,-1,-1, 4},{ 2,-1, 0, 5},{ 3,-1, 1, 6},{-1,-1, 2, 7},
 	{ 5, 0,-1, 8},{ 6, 1, 4, 9},{ 7, 2, 5,10},{-1, 3, 6,11},
@@ -446,7 +453,11 @@ NODE* baseMCTSPlay(BOARD *brd, double c){
 	root->child = NULL;
 	root->posi = brd;
 	root->Depth = 0;
+#ifdef USING_GPU_SIMULATE
 	explore(root, FIRST_LVL_GPU_SIMULATE, &tempWin, &tempLose, &tempDraw);
+#elif defined USING_CPU_SIMULATE
+    explore(root, FIRST_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
+#endif
 	root->W = tempWin;
 	root->L = tempLose;
 	root->D = tempDraw;
@@ -466,8 +477,12 @@ NODE* baseMCTSPlay(BOARD *brd, double c){
 #endif // ENABLE_PROFILING
 
 		/******* expansion & simulation *******/
-		explore(curNode, OTHER_LVL_GPU_SIMULATE, &tempWin, &tempLose, &tempDraw);
 
+#ifdef USING_GPU_SIMULATE
+        explore(curNode, OTHER_LVL_GPU_SIMULATE, &tempWin, &tempLose, &tempDraw);
+#elif defined USING_CPU_SIMULATE
+        explore(root, OTHER_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
+#endif
 		/********* back propogation **********/
 		for(k = 0; curNode != NULL; k++){
 			if(k%2 == 0){
@@ -503,7 +518,11 @@ NODE* rootParallelMCTSPlay(BOARD *brd, double c){
 	root->child = NULL;
 	root->posi = brd;
 	root->Depth = 0;
+#ifdef USING_GPU_SIMULATE
 	explore(root, FIRST_LVL_GPU_SIMULATE, &tempWin, &tempLose, &tempDraw);
+#elif defined USING_CPU_SIMULATE
+    explore(root, FIRST_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
+#endif
 	root->W = tempWin;
 	root->L = tempLose;
 	root->D = tempDraw;
@@ -525,7 +544,12 @@ NODE* rootParallelMCTSPlay(BOARD *brd, double c){
         int tmpWin, tmpLose, tmpDraw;
         #pragma omp for private(i) schedule(dynamic,1)
         for(int i = 0; i < rootCount; i++){
+#ifdef USING_GPU_SIMULATE
             explore(subroot[i], OTHER_LVL_GPU_SIMULATE, &tmpWin, &tmpLose, &tmpDraw);
+#elif defined USING_CPU_SIMULATE
+            explore(subroot[i], OTHER_LEVEL_SIMULATION, &tmpWin, &tmpLose, &tmpDraw);
+#endif
+
             subroot[i]->W += tmpWin;
             subroot[i]->L += tmpLose;
             subroot[i]->D += tmpDraw;
@@ -558,8 +582,12 @@ NODE* rootParallelMCTSPlay(BOARD *brd, double c){
                 searchTick += GetTickCount() - ENABLE_PROFILING_Tick;
                 #endif // ENABLE_PROFILING
 
-                explore(curNode, OTHER_LVL_GPU_SIMULATE, &tempWin, &tempLose, &tempDraw);
 
+#ifdef USING_GPU_SIMULATE
+                explore(curNode, OTHER_LVL_GPU_SIMULATE, &tempWin, &tempLose, &tempDraw);
+#elif defined USING_CPU_SIMULATE
+                explore(curNode, OTHER_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
+#endif
                 #pragma omp critical
                 {
                     fprintf(stderr, "%d/%d/%d\n", tempWin, tempLose, tempDraw);
@@ -598,8 +626,11 @@ NODE* ourParallelMCTSPlay(BOARD *brd, double c){
 	root->child = NULL;
 	root->posi = brd;
 	root->Depth = 0;
-	explore(root, FIRST_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
-
+#ifdef USING_GPU_SIMULATE
+	explore(root, FIRST_LVL_GPU_SIMULATE, &tempWin, &tempLose, &tempDraw);
+#elif defined USING_CPU_SIMULATE
+    explore(root, FIRST_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
+#endif
 	root->W = tempWin;
 	root->L = tempLose;
 	root->D = tempDraw;
@@ -622,7 +653,13 @@ NODE* ourParallelMCTSPlay(BOARD *brd, double c){
         #pragma omp for private(tempWin, tempLose, tempDraw, i) schedule(dynamic,1)
         //for(temproot = root->child; temproot != NULL; temproot = temproot->siblg){
         for(int i = 0; i < rootCount; i++){
-            explore(subroot[i], OTHER_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
+#ifdef USING_GPU_SIMULATE
+	explore(subroot[i], OTHER_LVL_GPU_SIMULATE, &tempWin, &tempLose, &tempDraw);
+#elif defined USING_CPU_SIMULATE
+    explore(subroot[i], OTHER_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
+#endif
+
+
             subroot[i]->W += tempWin;
             subroot[i]->L += tempLose;
             subroot[i]->D += tempDraw;
@@ -634,7 +671,6 @@ NODE* ourParallelMCTSPlay(BOARD *brd, double c){
             }
         }
     }
-    fprintf(stderr, "inital ok\n");
 
     for(int i = 0; i < rootCount; i++)
         omp_init_lock(&(subrootLock[i]));
@@ -670,7 +706,11 @@ NODE* ourParallelMCTSPlay(BOARD *brd, double c){
                 searchTick += GetTickCount() - ENABLE_PROFILING_Tick;
                 #endif // ENABLE_PROFILING
 
+#ifdef USING_GPU_SIMULATE
+                explore(curNode, OTHER_LVL_GPU_SIMULATE, &tempWin, &tempLose, &tempDraw);
+#elif defined USING_CPU_SIMULATE
                 explore(curNode, OTHER_LEVEL_SIMULATION, &tempWin, &tempLose, &tempDraw);
+#endif
 
                 #pragma omp critical
                 {
@@ -689,9 +729,7 @@ NODE* ourParallelMCTSPlay(BOARD *brd, double c){
                 }
                 omp_unset_lock(&(subrootLock[index]));
             }
-
 	}
-
 
 	//give out final answer
 	return find_best_child(root, c);
@@ -887,7 +925,14 @@ int main() {
 
     NODE* bestNode;
 	if(!BBB.ChkLose()){
-        bestNode = rootParallelMCTSPlay(&BBB,EXPLORE_PARA);
+
+        //bestNode = baseMCTSPlay(&BBB,EXPLORE_PARA);
+
+        //bestNode = rootParallelMCTSPlay(&BBB,EXPLORE_PARA);
+
+        bestNode = ourParallelMCTSPlay(&BBB,EXPLORE_PARA);
+
+
         Output(mymove = bestNode->premove);
 	}
 
